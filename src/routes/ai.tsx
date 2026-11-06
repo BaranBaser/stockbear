@@ -8,152 +8,51 @@ import { TrendingUp } from "lucide-react";
 import { stocks } from "@/lib/market-data";
 import { BIST_SYMBOLS, GLOBAL_SYMBOLS } from "@/lib/ai.functions";
 import { AiAnalysisResult } from "@/components/AiAnalysisResult";
-import { runAIEngine } from "@/lib/ml.engine";
+import { runWalkForwardBacktest } from "@/lib/backtest";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
 
 function BacktestSection({ symbol }: { symbol: string }) {
   const fetchHistory = useServerFn(fetchStockHistory);
-
-  const { data: historyData, isLoading: historyLoading } = useQuery({
+  const { data: historyData, isLoading: historyLoading, isError: historyError, refetch: refreshHistory } = useQuery({
     queryKey: ["backtest-history", symbol],
-    queryFn: async () => {
-      try { return await fetchHistory({ data: { symbol, range: "1y" } }); } catch (e) { console.warn("fetchBacktestHistory error:", e); return []; }
-    },
-    staleTime: 5 * 60 * 1000,
+    queryFn: () => fetchHistory({ data: { symbol, range: "1y" } }),
+    staleTime: 300_000, retry: false,
   });
-
-  const { data: walkForwardData, isLoading: engineLoading } = useQuery({
-    queryKey: ["backtest-walkforward", symbol],
-    queryFn: async () => {
-      if (!historyData || historyData.length < 60) return null;
-      try {
-        const closes = historyData.map((d: { close: number }) => d.close);
-        const horizon = 5;
-        const testPoints = [0.5, 0.6, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95]
-          .map((p) => Math.floor(closes.length * p))
-          .filter((i) => i + horizon < closes.length);
-
-        const results = [];
-        for (const idx of testPoints) {
-          const slice = historyData.slice(0, idx + 1);
-          const result = await runAIEngine(slice, symbol, slice.length);
-          const actual = closes[idx + horizon];
-          const predicted5d = result.predictions.find((p) => p.horizonDays === 5)
-            || result.predictions.reduce((best, p) => Math.abs(p.horizonDays - 5) < Math.abs(best.horizonDays - 5) ? p : best, result.predictions[0]);
-          results.push({
-            date: historyData[idx].date,
-            actualAtHorizon: actual,
-            predicted: predicted5d?.expectedPrice ?? closes[idx],
-            lowerBand: predicted5d?.lowerBand ?? closes[idx],
-            upperBand: predicted5d?.upperBand ?? closes[idx],
-            confidence: predicted5d?.confidence ?? 50,
-          });
-        }
-        return results;
-      } catch (e) { console.warn("walkForwardBacktest error:", e); return null; }
-    },
-    enabled: !!historyData && historyData.length >= 60,
-    staleTime: 5 * 60 * 1000,
+  const { data: result, isLoading: engineLoading, isError: engineError, refetch: refreshBacktest } = useQuery({
+    queryKey: ["backtest-walkforward", symbol, historyData],
+    queryFn: () => runWalkForwardBacktest(historyData!, symbol),
+    enabled: !!historyData && historyData.length >= 56,
+    staleTime: 300_000, retry: false,
   });
-
-  const chartData = useMemo(() => {
-    if (!historyData || !walkForwardData || walkForwardData.length === 0) {
-      if (!historyData) return [];
-      return historyData.map((d: { date: string; close: number }) => ({
-        date: new Date(d.date).toLocaleDateString("tr-TR", { month: "short", day: "numeric" }),
-        actual: +Number(d.close).toFixed(2),
-        predicted: null,
-        lowerBand: null,
-        upperBand: null,
-      }));
-    }
-
-    const predictedMap = new Map<string, typeof walkForwardData[0]>();
-    for (const p of walkForwardData) {
-      const key = new Date(p.date).toLocaleDateString("tr-TR", { month: "short", day: "numeric" });
-      predictedMap.set(key, p);
-    }
-
-    return historyData.map((d: { date: string; close: number }) => {
-      const dateStr = new Date(d.date).toLocaleDateString("tr-TR", { month: "short", day: "numeric" });
-      const wp = predictedMap.get(dateStr);
-      return {
-        date: dateStr,
-        actual: +Number(d.close).toFixed(2),
-        predicted: wp ? +Number(wp.predicted).toFixed(2) : null,
-        lowerBand: wp ? +Number(wp.lowerBand).toFixed(2) : null,
-        upperBand: wp ? +Number(wp.upperBand).toFixed(2) : null,
-      };
-    });
-  }, [historyData, walkForwardData]);
-
-  const metrics = useMemo(() => {
-    if (!walkForwardData || walkForwardData.length < 2) return { accuracy: 0, cumulativeReturn: 0, avgConfidence: 0 };
-    let matchCount = 0;
-    let totalConfidence = 0;
-    for (const point of walkForwardData) {
-      const currentIdx = historyData!.findIndex((d: { date: string }) => d.date === point.date);
-      if (currentIdx < 0) continue;
-      const currentPrice = historyData![currentIdx].close;
-      const actualDir = point.actualAtHorizon - currentPrice;
-      const predDir = point.predicted - currentPrice;
-      if ((actualDir >= 0 && predDir >= 0) || (actualDir < 0 && predDir < 0)) matchCount++;
-      totalConfidence += point.confidence;
-    }
-    const accuracy = (matchCount / walkForwardData.length) * 100;
-    const cumulativeReturn = ((historyData![historyData!.length - 1].close - historyData![0].close) / historyData![0].close) * 100;
-    const avgConfidence = totalConfidence / walkForwardData.length;
-    return { accuracy, cumulativeReturn, avgConfidence };
-  }, [walkForwardData, historyData]);
-
-  const isLoading = historyLoading || engineLoading;
-
+  const chartData = useMemo(() => result?.points.map(point => ({
+    date: new Date(point.date).toLocaleDateString("tr-TR", { month: "short", day: "numeric", timeZone: "Europe/Istanbul" }),
+    actual: point.actualAtHorizon, predicted: point.predicted,
+  })) ?? [], [result]);
+  const loading = historyLoading || engineLoading;
   return (
     <div className="bg-card border border-border p-5 rounded-xl shadow-sm">
-      <h2 className="text-lg font-bold mb-4 flex items-center gap-2">
-        <TrendingUp className="w-5 h-5 text-primary" /> Walk-Forward Backtest (Son 1 Ay Tahminleri)
-      </h2>
-      <p className="text-xs text-muted-foreground mb-4">
-        Motor 8 farklı geçmiş noktada 5 gün sonraki fiyatı tahmin ederek test etti. Gerçek fiyatla karşılaştırıldı.
-      </p>
-      {isLoading ? (
-        <div className="text-muted-foreground animate-pulse text-sm">Walk-forward backtest çalıştırılıyor... (8 farklı zaman dilimi test ediliyor)</div>
-      ) : chartData.length === 0 ? (
-        <div className="text-muted-foreground text-sm">Backtest verisi oluşturulamadı.</div>
-      ) : (
-        <>
-          <div className="h-[300px] mb-6">
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={chartData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                <XAxis dataKey="date" tick={{ fontSize: 11 }} interval="preserveStartEnd" />
-                <YAxis tick={{ fontSize: 11 }} domain={["auto", "auto"]} />
-                <Tooltip contentStyle={{ background: "var(--card)", border: "1px solid var(--border)" }} />
-                <Legend />
-                <Line type="monotone" dataKey="actual" stroke="#3b82f6" strokeWidth={2} dot={false} name="Gerçek Fiyat" />
-                <Line type="monotone" dataKey="predicted" stroke="#f59e0b" strokeWidth={2} dot={false} strokeDasharray="5 5" name="ML Tahmini (5G)" />
-              </LineChart>
-            </ResponsiveContainer>
+      <h2 className="text-lg font-bold mb-4 flex items-center gap-2"><TrendingUp className="w-5 h-5 text-primary" /> Geçmiş Veride Tahmin Testi</h2>
+      <p className="text-xs text-muted-foreground mb-4">Her tahminde yalnızca o tarihe kadar bilinen mumlar kullanılır. 5 işlem gününü kapsayan, çakışmayan dönemlerde yükseliş tahmininde ertesi seans açılışında alım; diğer durumda nakitte bekleme varsayılır. Sonuçlar komisyon, kayma, vergi ve temettü öncesidir.</p>
+      {loading ? <p className="text-sm text-muted-foreground animate-pulse">Geçmiş tahminler hesaplanıyor…</p>
+        : historyError || engineError ? <div role="alert" className="text-sm text-destructive">Backtest hesaplanamadı. <button className="underline" onClick={() => historyError ? refreshHistory() : refreshBacktest()}>Tekrar dene</button></div>
+        : !result ? <p className="text-sm text-muted-foreground">En az 56 geçerli günlük mum gerekir.</p>
+        : <>
+          <p className="text-xs text-muted-foreground mb-3">{result.points.length} test dönemi · {result.trades} alım · {new Date(result.startDate).toLocaleDateString("tr-TR")} – {new Date(result.endDate).toLocaleDateString("tr-TR")}. Grafikte tahminler hedef günün gerçek fiyatıyla eşleştirilir.</p>
+          <div className="h-[300px] mb-6"><ResponsiveContainer width="100%" height="100%"><LineChart data={chartData}>
+            <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" /><XAxis dataKey="date" tick={{ fontSize: 11 }} interval="preserveStartEnd" /><YAxis tick={{ fontSize: 11 }} domain={["auto", "auto"]} />
+            <Tooltip contentStyle={{ background: "var(--card)", border: "1px solid var(--border)" }} /><Legend />
+            <Line type="linear" dataKey="actual" stroke="#3b82f6" strokeWidth={2} dot={false} name="Hedef Gün Kapanışı" />
+            <Line type="linear" dataKey="predicted" stroke="#f59e0b" strokeWidth={2} dot={false} strokeDasharray="5 5" name="5 İşlem Günü Tahmini" />
+          </LineChart></ResponsiveContainer></div>
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            {[
+              { label: "Yön doğruluğu", value: result.directionAccuracy },
+              { label: "Ortalama mutlak yüzde hata (MAPE)", value: result.mape },
+              { label: "Strateji getirisi (masraf öncesi)", value: result.strategyReturn },
+              { label: "Aynı dönemde al-tut getirisi", value: result.buyHoldReturn },
+            ].map(metric => <div key={metric.label} className="rounded-lg border border-border bg-secondary/40 p-4"><div className="text-xs text-muted-foreground">{metric.label}</div><div className="text-xl font-bold mt-1">{metric.value.toFixed(2)}%</div></div>)}
           </div>
-          <div className="grid grid-cols-3 gap-4">
-            <div className="rounded-lg border border-border bg-secondary/40 p-4">
-              <div className="text-xs text-muted-foreground">Yön Doğruluk Oranı</div>
-              <div className="text-xl font-bold mt-1">%{metrics.accuracy.toFixed(1)}</div>
-              <div className="text-[10px] text-muted-foreground mt-1">{walkForwardData?.length || 0} test noktası</div>
-            </div>
-            <div className="rounded-lg border border-border bg-secondary/40 p-4">
-              <div className="text-xs text-muted-foreground">Kümülatif Getiri</div>
-              <div className={`text-xl font-bold mt-1 ${metrics.cumulativeReturn >= 0 ? "text-[color:var(--success)]" : "text-destructive"}`}>
-                {metrics.cumulativeReturn >= 0 ? "+" : ""}{metrics.cumulativeReturn.toFixed(2)}%
-              </div>
-            </div>
-            <div className="rounded-lg border border-border bg-secondary/40 p-4">
-              <div className="text-xs text-muted-foreground">Ort. Güven Skoru</div>
-              <div className="text-xl font-bold mt-1">%{metrics.avgConfidence.toFixed(1)}</div>
-            </div>
-          </div>
-        </>
-      )}
+        </>}
     </div>
   );
 }
@@ -178,18 +77,18 @@ function AIEnginePage() {
   const fetchTopAi = useServerFn(fetchTechnicalSignals);
   const fetchKronos = useServerFn(fetchKronosPrediction);
 
-  const { data: topAiData, isLoading: topLoading } = useQuery({
+  const { data: topAiData, isLoading: topLoading, isError: topError } = useQuery({
     queryKey: ["ai-top-analysis"],
     queryFn: async () => {
-      try { return await fetchTopAi(); } catch (e) { console.warn("fetchTechnicalSignals error:", e); return []; }
+      return fetchTopAi();
     },
     staleTime: 5 * 60 * 1000,
   });
 
-  const { data: aiData, isLoading } = useQuery({
+  const { data: aiData, isLoading, isError: analysisError, refetch: refreshAnalysis } = useQuery({
     queryKey: ["ai-analysis", selectedSymbol],
     queryFn: async () => {
-      try { return await fetchAi({ data: { symbol: selectedSymbol } }); } catch (e) { console.warn("fetchAiAnalysis error:", e); return null; }
+      return fetchAi({ data: { symbol: selectedSymbol } });
     },
     staleTime: 5 * 60 * 1000,
   });
@@ -227,7 +126,7 @@ function AIEnginePage() {
     <AppShell>
       <PageHeader
         title="AI Karar Motoru"
-        subtitle="Seçtiğiniz fon/hisse için geçmiş testleri tamamlanmış dinamik ağırlıklı makine öğrenmesi tahminleri."
+        subtitle="Geçmiş fiyat verisine dayalı deneysel tahminler ve aynı dönem için karşılaştırmalı backtest sonuçları."
       />
 
       <div className="flex flex-col gap-6">
@@ -238,6 +137,7 @@ function AIEnginePage() {
             <TrendingUp className="w-5 h-5 text-primary" /> AI Sinyal Fırsat Tablosu
           </h2>
           <p className="text-xs text-muted-foreground mb-4">Piyasadaki popüler hisselerin basit teknik indikatörler (RSI, Trend, Destek/Direnç) bazında günlük taraması. Yalnızca AL veya SAT konumunda olan fırsatlar listelenmektedir.</p>
+          {topError && <p role="alert" className="text-destructive text-sm">Sinyal verisi yenilenemedi. Önceki sonuçlar varsa güncel olmayabilir.</p>}
           {topLoading ? (
              <div className="text-muted-foreground animate-pulse text-sm">Yapay zeka tüm piyasayı (100+ hisse) tarıyor... (5-10 saniye sürebilir)</div>
           ) : !topAiData || topAiData.length === 0 ? (
@@ -254,7 +154,7 @@ function AIEnginePage() {
                    </tr>
                  </thead>
                  <tbody>
-                    {topAiData?.map((item: { symbol: string; analysis: { decision: string; rawScore: number; currentPrice: number } }) => (
+                    {topAiData?.map((item: { symbol: string; currency: string; analysis: { decision: string; rawScore: number; currentPrice: number } }) => (
                      <tr key={item.symbol} className="border-b border-border/50 hover:bg-secondary/50 cursor-pointer transition-colors" onClick={() => setSelectedSymbol(item.symbol)}>
                        <td className="py-3 pr-4 font-bold">{item.symbol}</td>
                        <td className="py-3 pr-4 font-bold">
@@ -265,7 +165,7 @@ function AIEnginePage() {
                        <td className="py-3 pr-4">
                          {item.analysis.rawScore.toFixed(0)} Puan
                        </td>
-                       <td className="py-3 pr-4 text-right">{item.analysis.currentPrice.toFixed(2)} ₺</td>
+                       <td className="py-3 pr-4 text-right">{item.analysis.currentPrice.toFixed(2)} {item.currency}</td>
                      </tr>
                    ))}
                  </tbody>
@@ -316,6 +216,7 @@ function AIEnginePage() {
         </div>
 
         {/* ANALİZ SONUÇLARI */}
+        {analysisError && <p role="alert" className="text-sm text-destructive">Analiz verisi alınamadı veya yeterli geçerli mum bulunamadı. <button className="underline" onClick={() => refreshAnalysis()}>Tekrar dene</button></p>}
         <AiAnalysisResult
           analysis={aiData?.analysis || null}
           shareCount={shareCount}

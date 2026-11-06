@@ -145,6 +145,13 @@ function RootShell({ children }: { children: ReactNode }) {
 
 function RootComponent() {
   const { queryClient } = Route.useRouteContext();
+  useEffect(() => {
+    if (import.meta.env.PROD && "serviceWorker" in navigator) {
+      void navigator.serviceWorker.register("/sw.js", { scope: "/" }).catch(error => {
+        console.warn("Çevrimdışı destek başlatılamadı.", error);
+      });
+    }
+  }, []);
 
   return (
     <QueryClientProvider client={queryClient}>

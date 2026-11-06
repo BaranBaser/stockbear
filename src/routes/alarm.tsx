@@ -1,3 +1,4 @@
+import { MarketDataStatus } from "@/components/MarketDataStatus";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { AppShell, PageHeader } from "@/components/AppShell";
 import { useAlarms, useAlarmHistory } from "@/lib/storage";
@@ -43,7 +44,7 @@ function AlarmPage() {
     }
   };
 
-  const { data: livePrices = {} } = useQuery({
+  const { data: livePrices = {}, isError: priceError, isLoading: priceLoading, refetch: refreshPrices } = useQuery({
     queryKey: ["alarm-prices", alarms.map((a) => a.symbol).join(",")],
     queryFn: async () => {
       try {
@@ -55,13 +56,14 @@ function AlarmPage() {
             if (result?.price) prices[sym] = result.price;
           } catch (e) { console.warn("Alarm price fetch error:", sym, e); }
         }
+        if (uniqueSymbols.length && !Object.keys(prices).length) throw new Error("Alarm fiyatları alınamadı.");
         return prices;
-      } catch (e) { console.warn("alarmPriceFetch error:", e);
-        return {} as Record<string, number>;
-      }
+      } catch (e) { console.warn("alarmPriceFetch error:", e); throw e; }
     },
     staleTime: 60_000,
     refetchInterval: 120_000,
+    enabled: alarms.length > 0,
+    retry: false,
     throwOnError: false,
   });
 
@@ -69,7 +71,7 @@ function AlarmPage() {
 
   // Alarm tetikleme kontrolü ve bildirim gönderimi (cooldown: 30 dk)
   useEffect(() => {
-    if (!livePrices || Object.keys(livePrices).length === 0) return;
+    if (priceError || !livePrices || Object.keys(livePrices).length === 0) return;
     const now = Date.now();
     const COOLDOWN_MS = 30 * 60 * 1000;
     for (const alarm of alarms.filter((a) => a.active)) {
@@ -93,7 +95,7 @@ function AlarmPage() {
         });
       }
     }
-  }, [livePrices, alarms, addHistory]);
+  }, [livePrices, alarms, addHistory, priceError]);
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -108,6 +110,7 @@ function AlarmPage() {
 
   return (
     <AppShell>
+      {alarms.length > 0 && <MarketDataStatus isError={priceError} isLoading={priceLoading} hasData={Object.keys(livePrices).length > 0} unavailableSymbols={[...new Set(alarms.map(a => a.symbol))].filter(s => !livePrices[s])} onRetry={() => refreshPrices()} />}
       <PageHeader
         title="Fiyat Alarmları"
         subtitle="Hisse fiyatlarını izleyin, hedef fiyatlara ulaştığında haberdar olun."
@@ -306,7 +309,7 @@ function AlarmPage() {
       </div>
 
       <div className="rounded-xl border border-border bg-card p-4 text-center text-xs text-muted-foreground">
-        Alarmlar localStorage'da saklanır. Canlı fiyatlar Yahoo Finance tarafından sağlanır.
+        Alarmlar bu tarayıcıda saklanır ve yalnızca bu sayfa açıkken kontrol edilir. Canlı fiyatlar Yahoo Finance tarafından sağlanır.
       </div>
     </AppShell>
   );

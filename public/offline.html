@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="tr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#111114" />
+    <title>Bağlantı yok — Stockbear</title>
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        min-height: 100svh;
+        display: grid;
+        place-items: center;
+        padding: 24px;
+        background: #111114;
+        color: #f6f5f1;
+        font-family: system-ui, sans-serif;
+      }
+      main {
+        width: min(100%, 460px);
+        padding: 32px;
+        border: 1px solid #34343b;
+        border-radius: 20px;
+        background: #1b1b20;
+      }
+      .brand {
+        color: #efc34a;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+      }
+      h1 {
+        font-size: 28px;
+        line-height: 1.2;
+      }
+      p {
+        color: #b6b6c1;
+        line-height: 1.65;
+      }
+      button {
+        border: 0;
+        border-radius: 10px;
+        padding: 13px 20px;
+        background: #efc34a;
+        color: #161411;
+        font: inherit;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      button:focus-visible {
+        outline: 3px solid white;
+        outline-offset: 4px;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="brand">STOCKBEAR</div>
+      <h1>Bağlantı kurulamadı</h1>
+      <p>
+        İnternet bağlantınızı kontrol edin. Stockbear sunucusuna ulaşılamıyor.
+      </p>
+      <p>
+        Fiyat ve analiz verileri ağ bağlantısı gerektirir. Eski fiyatlar güncel
+        veri olarak gösterilmez.
+      </p>
+      <button type="button" onclick="location.reload()">Tekrar dene</button>
+    </main>
+  </body>
+</html>

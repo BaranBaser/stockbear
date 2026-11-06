@@ -1,12 +1,14 @@
+import { MarketDataStatus } from "@/components/MarketDataStatus";
+import { useBistData } from "@/lib/useBistData";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useMemo } from "react";
 import { Sparkles, ArrowRight, Crown, TrendingUp, TrendingDown, BarChart3, Activity } from "lucide-react";
 import heroImg from "@/assets/hero-bull-ai.jpg";
 import logo from "@/assets/stockbear-logo.png";
-import { AppShell, Sparkline, genLine } from "@/components/AppShell";
-import { stocks, SECTOR_MAP } from "@/lib/market-data";
+import { AppShell } from "@/components/AppShell";
+import { SECTOR_MAP } from "@/lib/market-data";
 import { useServerFn } from "@tanstack/react-start";
-import { fetchIndexes, fetchBistData, fetchNews } from "@/lib/ai.functions";
+import { fetchIndexes, fetchNews } from "@/lib/ai.functions";
 import { useQuery } from "@tanstack/react-query";
 import type { StockData } from "@/lib/ai.functions";
 
@@ -38,27 +40,19 @@ export const Route = createFileRoute("/")({
 
 function Dashboard() {
   const fetchIdx = useServerFn(fetchIndexes);
-  const fetchBist = useServerFn(fetchBistData);
+
   const fetchNewsFn = useServerFn(fetchNews);
 
-  const { data: indexes = [], isLoading: loadingIdx } = useQuery({
+  const { data: indexes = [], isLoading: loadingIdx, isError: indexError, refetch: refreshIndexes } = useQuery({
     queryKey: ["indexes"],
-    queryFn: async () => {
-      try { return await fetchIdx({}); } catch (e) { console.warn("fetchIndexes error:", e); return []; }
-    },
+    queryFn: () => fetchIdx({}),
     staleTime: 60_000,
     refetchInterval: 120_000,
     throwOnError: false,
   });
 
-  const { data: bistData = [] } = useQuery({
-    queryKey: ["bist-data"],
-    queryFn: async () => {
-      try { return await fetchBist({}); } catch (e) { console.warn("fetchBistData error:", e); return []; }
-    },
-    staleTime: 300_000,
-    throwOnError: false,
-  });
+  const market = useBistData();
+  const bistData = market.stocks;
 
   const { data: news = [] } = useQuery({
     queryKey: ["news-home"],
@@ -69,28 +63,15 @@ function Dashboard() {
     throwOnError: false,
   });
 
-  const displayStocks: DisplayItem[] = bistData.length > 0
+  const displayStocks: DisplayItem[] = useMemo(() => bistData.length > 0
     ? bistData.map((d: StockData) => ({
         ...d,
         change: d.change,
         changePercent: d.changePercent,
         sector: SECTOR_MAP[d.symbol] || "Diğer",
       }))
-    : stocks.slice(0, 10).map((s) => ({
-        ...s,
-        change: s.change,
-        changePercent: s.changePercent,
-        sector: s.sector,
-      }));
-  const displayIndexes = indexes.length > 0
-    ? indexes
-    : [
-        { name: "BIST 100", value: 0, changePercent: 0, symbol: "", change: 0, prevClose: 0, high: 0, low: 0 },
-        { name: "S&P 500", value: 0, changePercent: 0, symbol: "", change: 0, prevClose: 0, high: 0, low: 0 },
-        { name: "NASDAQ", value: 0, changePercent: 0, symbol: "", change: 0, prevClose: 0, high: 0, low: 0 },
-        { name: "DOLAR/TL", value: 0, changePercent: 0, symbol: "", change: 0, prevClose: 0, high: 0, low: 0 },
-        { name: "ALTIN", value: 0, changePercent: 0, symbol: "", change: 0, prevClose: 0, high: 0, low: 0 },
-      ];
+    : [], [bistData]);
+  const displayIndexes = indexes;
 
   const formatVal = (name: string, val: number) => {
     if (name.includes("DOLAR") || name.includes("EUR")) return val.toFixed(4);
@@ -126,7 +107,7 @@ function Dashboard() {
         <div className="grid md:grid-cols-2 gap-6 items-center">
           <div>
             <h1 className="text-4xl md:text-5xl font-bold leading-tight">Hisse Analizi<br /><span className="text-primary">Gerçek Veri</span> ile</h1>
-            <p className="text-muted-foreground mt-4">Yahoo Finance'ten canlı BIST verileri. {displayStocks.length}+ hisse, teknik analiz, sektör analizi. Veriyi anlayın, fırsatı yakalayın.</p>
+            <p className="text-muted-foreground mt-4">Yahoo Finance üzerinden BIST verileri. {displayStocks.length} hisse, teknik analiz, sektör analizi. Veriyi anlayın, fırsatı yakalayın.</p>
             <div className="flex flex-wrap gap-3 mt-6">
               <Link to="/analiz" className="inline-flex items-center gap-2 bg-primary text-primary-foreground font-medium rounded-lg px-5 py-3 hover:bg-primary/90" style={{ boxShadow: "var(--shadow-gold)" }}>
                 Hisse Analizine Başla <ArrowRight className="w-4 h-4" />
@@ -142,6 +123,8 @@ function Dashboard() {
         </div>
       </section>
 
+      <MarketDataStatus {...market} hasData={bistData.length > 0} onRetry={() => market.refetch()} label="En eski hisse fiyat zamanı" />
+      <MarketDataStatus isLoading={loadingIdx} isError={indexError} hasData={indexes.length > 0} asOf={indexes.map(i => i.asOf).sort()[0]} onRetry={() => refreshIndexes()} label="En eski endeks zamanı" />
       {/* Endeksler */}
       <section className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
         {displayIndexes.map((idx) => {
@@ -159,9 +142,7 @@ function Dashboard() {
                   </div>
                 </>
               )}
-              <div className="mt-2 -mx-1">
-                <Sparkline data={genLine(idx.name.charCodeAt(0), 20, up ? "up" : "down")} color={up ? "oklch(0.72 0.19 145)" : "oklch(0.65 0.22 25)"} height={35} />
-              </div>
+              <div className="mt-2 text-[10px] text-muted-foreground">Yahoo Finance · {new Date(idx.asOf).toLocaleString("tr-TR", { timeZone: "Europe/Istanbul" })}</div>
             </div>
           );
         })}
@@ -196,7 +177,7 @@ function Dashboard() {
                   <td className="text-xs text-muted-foreground">{SECTOR_MAP[p.symbol] || "Diğer"}</td>
                   <td className="text-right">{typeof p.price === "number" ? p.price.toFixed(2) : p.price} TL</td>
                   <td className={`text-right font-semibold ${p.changePercent >= 0 ? "text-[color:var(--success)]" : "text-destructive"}`}>{p.changePercent >= 0 ? "+" : ""}{typeof p.changePercent === "number" ? p.changePercent.toFixed(2) : p.changePercent}%</td>
-                  <td className="text-right text-muted-foreground text-xs">{(p.volume / 1e9).toFixed(2)} Mlr</td>
+                  <td className="text-right text-muted-foreground text-xs">{(p.volume / 1e9).toFixed(2)} Mlr lot</td>
                 </tr>
               ))}
             </tbody>
@@ -312,7 +293,7 @@ function Dashboard() {
                   {s.changePercent >= 0 ? "+" : ""}{typeof s.changePercent === "number" ? s.changePercent.toFixed(2) : s.changePercent}%
                 </span>
               </div>
-              <div className="text-[10px] text-muted-foreground mt-1">Hacim: {(s.volume / 1e9).toFixed(2)} Mlr</div>
+              <div className="text-[10px] text-muted-foreground mt-1">Hacim: {(s.volume / 1e9).toFixed(2)} Mlr lot</div>
             </Link>
           ))}
         </div>
@@ -324,7 +305,7 @@ function Dashboard() {
           <div className="w-11 h-11 rounded-full bg-primary/20 flex items-center justify-center"><Crown className="w-5 h-5 text-primary" /></div>
           <div>
             <div className="font-semibold">Detaylı Hisse Analizi</div>
-            <p className="text-sm text-muted-foreground">{displayStocks.length}+ hisse için teknik analiz, grafikler, RSI, MACD ve canlı fiyat verisi.</p>
+            <p className="text-sm text-muted-foreground">{displayStocks.length}+ hisse için teknik analiz, grafikler, RSI, MACD ve sağlayıcı fiyat verisi.</p>
           </div>
         </div>
         <Link to="/analiz" className="inline-flex items-center gap-2 bg-primary text-primary-foreground font-medium rounded-lg px-5 py-3 hover:bg-primary/90">Analize Git <ArrowRight className="w-4 h-4" /></Link>

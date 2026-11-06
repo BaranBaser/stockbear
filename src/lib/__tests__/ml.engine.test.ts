@@ -249,11 +249,11 @@ describe("detectRegime", () => {
 
 describe("interpolatePredictions", () => {
   const basePredictions = [
-    { horizonDays: 1, expectedPrice: 100, lowerBand: 95, upperBand: 105, expectedReturnPercent: 0, confidence: 80, rmse: 2, models: [] },
-    { horizonDays: 5, expectedPrice: 102, lowerBand: 96, upperBand: 108, expectedReturnPercent: 2, confidence: 75, rmse: 3, models: [] },
-    { horizonDays: 20, expectedPrice: 108, lowerBand: 98, upperBand: 118, expectedReturnPercent: 8, confidence: 65, rmse: 5, models: [] },
-    { horizonDays: 60, expectedPrice: 115, lowerBand: 100, upperBand: 130, expectedReturnPercent: 15, confidence: 55, rmse: 8, models: [] },
-    { horizonDays: 120, expectedPrice: 125, lowerBand: 105, upperBand: 145, expectedReturnPercent: 25, confidence: 45, rmse: 12, models: [] },
+    { horizonDays: 1, expectedPrice: 100, lowerBand: 95, upperBand: 105, expectedReturnPercent: 0, evaluationScore: 80, mape: 2, models: [] },
+    { horizonDays: 5, expectedPrice: 102, lowerBand: 96, upperBand: 108, expectedReturnPercent: 2, evaluationScore: 75, mape: 3, models: [] },
+    { horizonDays: 20, expectedPrice: 108, lowerBand: 98, upperBand: 118, expectedReturnPercent: 8, evaluationScore: 65, mape: 5, models: [] },
+    { horizonDays: 60, expectedPrice: 115, lowerBand: 100, upperBand: 130, expectedReturnPercent: 15, evaluationScore: 55, mape: 8, models: [] },
+    { horizonDays: 120, expectedPrice: 125, lowerBand: 105, upperBand: 145, expectedReturnPercent: 25, evaluationScore: 45, mape: 12, models: [] },
   ];
 
   it("hedef sayısında tahmin üretir", () => {
@@ -274,11 +274,11 @@ describe("interpolatePredictions", () => {
     }
   });
 
-  it("confidence 10-99 arasında kalır", () => {
+  it("evaluationScore 10-99 arasında kalır", () => {
     const result = interpolatePredictions(basePredictions, 30);
     for (const p of result) {
-      expect(p.confidence).toBeGreaterThanOrEqual(10);
-      expect(p.confidence).toBeLessThanOrEqual(99);
+      expect(p.evaluationScore).toBeGreaterThanOrEqual(10);
+      expect(p.evaluationScore).toBeLessThanOrEqual(99);
     }
   });
 

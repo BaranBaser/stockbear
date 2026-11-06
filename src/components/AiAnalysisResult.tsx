@@ -40,8 +40,8 @@ function RegimeBadge({ regime }: { regime: string }) {
   );
 }
 
-function DecisionCard({ decision, confidenceScore, rawScore, currentPrice, volatility, shareCount, regime }: {
-  decision: string; confidenceScore: number; rawScore: number; currentPrice: number; volatility: number; shareCount: number; regime: string;
+function DecisionCard({ decision, signalScore, currentPrice, volatility, shareCount, regime, currency }: {
+  decision: string; signalScore: number; currentPrice: number; volatility: number; shareCount: number; regime: string; currency: string;
 }) {
   return (
     <div className="grid md:grid-cols-4 gap-4">
@@ -60,18 +60,18 @@ function DecisionCard({ decision, confidenceScore, rawScore, currentPrice, volat
       </div>
 
       <div className="rounded-xl p-6 border border-border bg-card flex flex-col items-center justify-center text-center shadow-md">
-        <div className="text-sm font-bold tracking-widest uppercase mb-3 text-muted-foreground">Ortak Güven Skoru</div>
+        <div className="text-sm font-bold tracking-widest uppercase mb-3 text-muted-foreground">Teknik Puan</div>
         <div className="w-full bg-secondary h-4 rounded-full max-w-[200px] overflow-hidden mb-3 relative">
-          <div className="absolute inset-y-0 left-0 bg-primary rounded-full transition-all duration-1000" style={{ width: `${confidenceScore}%` }} />
+          <div className="absolute inset-y-0 left-0 bg-primary rounded-full transition-all duration-1000" style={{ width: `${signalScore}%` }} />
         </div>
-        <div className="text-3xl font-black">%{confidenceScore.toFixed(1)}</div>
-        <div className="text-xs text-muted-foreground mt-2">İç Puanlama: {rawScore?.toFixed(1) || "-"}</div>
+        <div className="text-3xl font-black">{signalScore.toFixed(0)} / 100</div>
+        <div className="text-xs text-muted-foreground mt-2">0: SAT yönü · 100: AL yönü. Başarı olasılığı değildir.</div>
       </div>
 
       <div className="rounded-xl p-6 border border-border bg-card flex flex-col items-center justify-center text-center shadow-md">
         <div className="text-sm font-bold tracking-widest uppercase mb-2 text-muted-foreground">Şu Anki Toplam Değer</div>
-        <div className="text-4xl font-black">{(currentPrice * shareCount).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺</div>
-        <div className="text-sm text-muted-foreground mt-2">Birim Fiyat: {currentPrice.toFixed(2)} ₺ | Volatilite: %{volatility.toFixed(2)}</div>
+        <div className="text-4xl font-black">{(currentPrice * shareCount).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} {currency}</div>
+        <div className="text-sm text-muted-foreground mt-2">Birim Fiyat: {currentPrice.toFixed(2)} {currency} | Yıllık volatilite: %{volatility.toFixed(2)}</div>
       </div>
 
       <div className="rounded-xl p-6 border border-border bg-card flex flex-col items-center justify-center text-center shadow-md">
@@ -108,7 +108,7 @@ function IndicatorGauge({ label, value, min, max, unit, warnLow, warnHigh }: {
   );
 }
 
-function RiskManagementCard({ risk, currentPrice }: { risk: AnalysisData['riskManagement']; currentPrice: number }) {
+function RiskManagementCard({ risk, currentPrice, currency }: { currency: string; risk: AnalysisData['riskManagement']; currentPrice: number }) {
   return (
     <div className="rounded-xl border border-border bg-card p-5 shadow-sm">
       <div className="flex items-center gap-2 mb-4">
@@ -118,18 +118,18 @@ function RiskManagementCard({ risk, currentPrice }: { risk: AnalysisData['riskMa
       <div className="grid grid-cols-2 gap-3">
         <div className="bg-destructive/10 rounded-lg p-3 text-center border border-destructive/20">
           <div className="text-[10px] font-bold text-destructive uppercase mb-1">Önerilen Stop-Loss</div>
-          <div className="text-sm font-black text-destructive">{risk.suggestedStopLoss.toFixed(2)} ₺</div>
+          <div className="text-sm font-black text-destructive">{risk.suggestedStopLoss.toFixed(2)} {currency}</div>
           <div className="text-[10px] text-muted-foreground mt-1">-%{(((currentPrice - risk.suggestedStopLoss) / currentPrice) * 100).toFixed(1)}</div>
         </div>
         <div className="bg-[color:var(--success)]/10 rounded-lg p-3 text-center border border-[color:var(--success)]/20">
           <div className="text-[10px] font-bold text-[color:var(--success)] uppercase mb-1">Önerilen Take-Profit</div>
-          <div className="text-sm font-black text-[color:var(--success)]">{risk.suggestedTakeProfit.toFixed(2)} ₺</div>
+          <div className="text-sm font-black text-[color:var(--success)]">{risk.suggestedTakeProfit.toFixed(2)} {currency}</div>
           <div className="text-[10px] text-muted-foreground mt-1">+%{(((risk.suggestedTakeProfit - currentPrice) / currentPrice) * 100).toFixed(1)}</div>
         </div>
         <div className="bg-primary/10 rounded-lg p-3 text-center border border-primary/20">
           <div className="text-[10px] font-bold text-primary uppercase mb-1">Önerilen Pozisyon</div>
-          <div className="text-sm font-black text-primary">%{risk.suggestedPositionSize.toFixed(1)}</div>
-          <div className="text-[10px] text-muted-foreground mt-1">Portföy oranı (Kelly)</div>
+          <div className="text-sm font-black text-primary">{risk.suggestedPositionSize === null ? "Hesaplanmıyor" : `%${risk.suggestedPositionSize.toFixed(1)}`}</div>
+          <div className="text-[10px] text-muted-foreground mt-1">Başarı oranı doğrulanmadı</div>
         </div>
         <div className="bg-secondary/40 rounded-lg p-3 text-center border border-border/50">
           <div className="text-[10px] font-bold text-muted-foreground uppercase mb-1">Risk/Kazanç Oranı</div>
@@ -143,7 +143,7 @@ function RiskManagementCard({ risk, currentPrice }: { risk: AnalysisData['riskMa
   );
 }
 
-function HorizonCard({ prediction, currentPrice, shareCount }: { prediction: Prediction; currentPrice: number; shareCount: number }) {
+function HorizonCard({ prediction, currentPrice, shareCount, currency }: { currency: string; prediction: Prediction; currentPrice: number; shareCount: number }) {
   return (
     <div className="border border-border rounded-xl bg-card overflow-hidden shadow-sm">
       <div className="p-4 bg-secondary/30 border-b border-border flex justify-between items-center">
@@ -152,9 +152,9 @@ function HorizonCard({ prediction, currentPrice, shareCount }: { prediction: Pre
         </h3>
         <div className="text-right">
           <div className={`text-lg font-black ${prediction.expectedReturnPercent >= 0 ? "text-[color:var(--success)]" : "text-destructive"}`}>
-            {(prediction.expectedPrice * shareCount).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺
+            {(prediction.expectedPrice * shareCount).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} {currency}
             <span className="text-sm ml-2">
-              ({prediction.expectedReturnPercent >= 0 ? "+" : ""}{((prediction.expectedPrice - currentPrice) * shareCount).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺ Kâr/Zarar)
+              ({prediction.expectedReturnPercent >= 0 ? "+" : ""}{((prediction.expectedPrice - currentPrice) * shareCount).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} {currency} Kâr/Zarar)
             </span>
           </div>
         </div>
@@ -167,9 +167,9 @@ function HorizonCard({ prediction, currentPrice, shareCount }: { prediction: Pre
             {prediction.models.map((m) => (
               <div key={m.model} className="bg-secondary/40 rounded-lg p-3 text-center border border-border/50">
                 <div className="text-[10px] font-bold text-muted-foreground truncate mb-1">{m.model.replace("_", " ")}</div>
-                <div className="text-sm font-semibold">{(m.prediction * shareCount).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺</div>
+                <div className="text-sm font-semibold">{(m.prediction * shareCount).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} {currency}</div>
                 <div className="flex items-center justify-between mt-2 pt-2 border-t border-border/50 text-[10px]">
-                  <span className="text-destructive font-medium">Hata: %{m.rmse.toFixed(1)}</span>
+                  <span className="text-destructive font-medium">{m.mape === null ? "Test verisi yok" : `MAPE: %${m.mape.toFixed(1)}`}</span>
                   <span className="text-primary font-bold">Ağırlık: %{(m.weight * 100).toFixed(0)}</span>
                 </div>
               </div>
@@ -179,12 +179,12 @@ function HorizonCard({ prediction, currentPrice, shareCount }: { prediction: Pre
 
         <div className="bg-background rounded-lg p-4 text-sm border border-border flex justify-between items-center">
           <div>
-            <div className="text-muted-foreground text-xs mb-1">Nihai Ortak Güven (Yanılma Payı)</div>
-            <div className="font-semibold text-destructive">± %{prediction.rmse.toFixed(2)}</div>
+            <div className="text-muted-foreground text-xs mb-1">Geçmiş tahmin hatası (MAPE)</div>
+            <div className="font-semibold text-destructive">{prediction.mape === null ? "Bu ufuk için test verisi yok" : `%${prediction.mape.toFixed(2)} · ${prediction.evaluationSamples ?? 0} test noktası`}</div>
           </div>
           <div className="text-right">
-            <div className="text-muted-foreground text-xs mb-1">Toplam Güvenlik Bandı Değeri</div>
-            <div className="font-semibold">{(prediction.lowerBand * shareCount).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺ - {(prediction.upperBand * shareCount).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₺</div>
+            <div className="text-muted-foreground text-xs mb-1">Sezgisel fiyat aralığı</div>
+            <div className="font-semibold">{(prediction.lowerBand * shareCount).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} {currency} - {(prediction.upperBand * shareCount).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} {currency}</div>
           </div>
         </div>
       </div>
@@ -262,11 +262,12 @@ export function AiAnalysisResult({ analysis, shareCount, isLoading = false, kron
   if (!analysis) {
     return (
       <div className="py-20 text-center text-muted-foreground border border-border bg-card rounded-xl">
-        Yeterli geçmiş veri bulunamadı. Algoritmaların çalışması için en az 30 günlük fiyat geçmişi gereklidir.
+        Yeterli geçmiş veri bulunamadı. Algoritmaların çalışması için en az 50 günlük fiyat geçmişi gereklidir.
       </div>
     );
   }
 
+  const currency = analysis.currency;
   const keyHorizons = [5, 15, 30, 60, 80, 120];
   const filteredPredictions = keyHorizons.map((target) => {
     return analysis.predictions.reduce((best, p) => {
@@ -279,12 +280,12 @@ export function AiAnalysisResult({ analysis, shareCount, isLoading = false, kron
     <div className="space-y-6">
       <DecisionCard
         decision={analysis.decision}
-        confidenceScore={analysis.confidenceScore}
-        rawScore={analysis.rawScore}
+        signalScore={analysis.signalScore}
         currentPrice={analysis.currentPrice}
         volatility={analysis.volatility}
         shareCount={shareCount}
         regime={analysis.regime}
+        currency={analysis.currency}
       />
 
       {/* Advanced Indicators Row */}
@@ -299,12 +300,12 @@ export function AiAnalysisResult({ analysis, shareCount, isLoading = false, kron
           <IndicatorGauge label="ADX" value={analysis.indicators.adx} min={0} max={60} warnHigh={40} />
           <IndicatorGauge label="CCI" value={analysis.indicators.cci} min={-200} max={200} warnLow={-100} warnHigh={100} />
           <IndicatorGauge label="OBV" value={analysis.indicators.obv} min={-1e9} max={1e9} />
-          <IndicatorGauge label="ATR" value={analysis.indicators.atr} min={0} max={analysis.currentPrice * 0.1} unit=" ₺" />
+          <IndicatorGauge label="ATR" value={analysis.indicators.atr} min={0} max={analysis.currentPrice * 0.1} unit={` ${currency}`} />
         </div>
         <div className="mt-3 grid grid-cols-2 gap-3">
           <div className="bg-secondary/40 rounded-lg p-3 border border-border/50 flex justify-between items-center">
             <span className="text-[10px] font-bold text-muted-foreground uppercase">VWAP</span>
-            <span className="text-xs font-black">{analysis.indicators.vwap.toFixed(2)} ₺</span>
+            <span className="text-xs font-black">{analysis.indicators.vwap.toFixed(2)} {currency}</span>
           </div>
           <div className="bg-secondary/40 rounded-lg p-3 border border-border/50 flex justify-between items-center">
             <span className="text-[10px] font-bold text-muted-foreground uppercase">Trend</span>
@@ -365,7 +366,7 @@ export function AiAnalysisResult({ analysis, shareCount, isLoading = false, kron
                           {signal}
                         </div>
                         <div className={`text-sm font-bold ${isUp ? "text-[color:var(--success)]" : "text-destructive"}`}>
-                          Beklenen Getiri: {isUp ? "+" : ""}{totalChange.toFixed(2)}% → {lastPred.close.toFixed(2)} ₺
+                          Beklenen Getiri: {isUp ? "+" : ""}{totalChange.toFixed(2)}% → {lastPred.close.toFixed(2)} {currency}
                         </div>
                       </div>
                     );
@@ -402,7 +403,7 @@ export function AiAnalysisResult({ analysis, shareCount, isLoading = false, kron
       </div>
 
       {/* Risk Management */}
-      <RiskManagementCard risk={analysis.riskManagement} currentPrice={analysis.currentPrice} />
+      <RiskManagementCard currency={currency} risk={analysis.riskManagement} currentPrice={analysis.currentPrice} />
 
       <h2 className="text-xl font-bold mt-8 mb-4 border-b border-border pb-2 flex items-center gap-2">
         <Zap className="w-5 h-5 text-primary" /> Zaman Dilimlerine Göre Makine Öğrenmesi Raporları
@@ -410,7 +411,7 @@ export function AiAnalysisResult({ analysis, shareCount, isLoading = false, kron
 
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
         {filteredPredictions.map((p) => (
-          <HorizonCard key={p.horizonDays} prediction={p} currentPrice={analysis.currentPrice} shareCount={shareCount} />
+          <HorizonCard currency={currency} key={p.horizonDays} prediction={p} currentPrice={analysis.currentPrice} shareCount={shareCount} />
         ))}
       </div>
 

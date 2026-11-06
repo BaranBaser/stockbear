@@ -1,70 +1,18 @@
 import { createServerFn } from "@tanstack/react-start";
 import { SECTOR_MAP } from "./market-data";
 
-// ─── Yahoo Finance helpers ──────────────────────────────────────────────────
+import { z } from "zod";
+import { createYahooClient, parseQuote, parseHistory, collectQuotes, stockInput, historyInput, batchInput, type MarketQuote } from "./market-feed";
 
-const YF_BASE = "https://query1.finance.yahoo.com/v8/finance/chart";
-
-// Simple in-memory cache for Yahoo Finance API calls
-const yfCache = new Map<string, { data: unknown; timestamp: number }>();
-const CACHE_TTL = 60_000; // 60 seconds
-
-async function yfFetch(symbol: string, range = "1d", interval = "1d") {
-  try {
-    const cacheKey = `${symbol}:${range}:${interval}`;
-    const cached = yfCache.get(cacheKey);
-    if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
-      return cached.data as Record<string, unknown>;
-    }
-
-    const url = `${YF_BASE}/${encodeURIComponent(symbol)}?interval=${interval}&range=${range}`;
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 8000);
-    const res = await fetch(url, {
-      headers: { "User-Agent": "Mozilla/5.0" },
-      signal: controller.signal,
-    });
-    clearTimeout(timeout);
-    if (!res.ok) return null;
-    const json = await res.json();
-    const result = json.chart?.result?.[0] ?? null;
-    
-    if (result) {
-      yfCache.set(cacheKey, { data: result, timestamp: Date.now() });
-    }
-    
-    return result;
-  } catch (e) {
-    console.warn("yfFetch error:", symbol, e);
-    return null;
-  }
-}
-
-function parseMeta(result: Record<string, unknown>) {
-  const meta = result?.meta as Record<string, unknown> | undefined;
-  if (!meta) return null;
-  const price = (meta.regularMarketPrice as number) ?? 0;
-  const prevClose = (meta.chartPreviousClose as number) ?? 0;
-  const change = price - prevClose;
-  const changePercent = prevClose ? ((price - prevClose) / prevClose) * 100 : 0;
-  return {
-    symbol: meta.symbol as string,
-    name: (meta.shortName || meta.longName || meta.symbol) as string,
-    price,
-    prevClose,
-    change,
-    changePercent,
-    high: (meta.regularMarketDayHigh as number) ?? 0,
-    low: (meta.regularMarketDayLow as number) ?? 0,
-    volume: (meta.regularMarketVolume as number) ?? 0,
-    high52: (meta.fiftyTwoWeekHigh as number) ?? 0,
-    low52: (meta.fiftyTwoWeekLow as number) ?? 0,
-  };
-}
+const yfFetch = createYahooClient();
+const parseMeta = parseQuote;
 
 // ─── Market Indexes ─────────────────────────────────────────────────────────
 
 type IndexData = {
+  source: "Yahoo Finance";
+  asOf: string;
+  fetchedAt: string;
   name: string;
   symbol: string;
   value: number;
@@ -90,11 +38,14 @@ export const fetchIndexes = createServerFn({ method: "GET" })
     const results = await Promise.allSettled(
       INDEX_SYMBOLS.map(async (idx) => {
         const result = await yfFetch(idx.symbol);
-        const meta = parseMeta(result as Record<string, unknown>);
+        const meta = parseMeta(result);
         if (!meta) return null;
         const change = meta.price - meta.prevClose;
         const changePercent = meta.prevClose ? (change / meta.prevClose) * 100 : 0;
         return {
+          source: meta.source,
+          asOf: meta.asOf,
+          fetchedAt: meta.fetchedAt,
           name: idx.name,
           symbol: idx.symbol,
           value: meta.price,
@@ -106,27 +57,17 @@ export const fetchIndexes = createServerFn({ method: "GET" })
         } as IndexData;
       }),
     );
-    return results
+    const indexes = results
       .filter((r): r is PromiseFulfilledResult<IndexData | null> => r.status === "fulfilled")
       .map((r) => r.value)
       .filter(Boolean) as IndexData[];
+    if (!indexes.length) throw new Error("Endeks verisi alınamadı.");
+    return indexes;
   });
 
 // ─── BIST Stocks (Genişletilmiş) ───────────────────────────────────────────
 
-export type StockData = {
-  symbol: string;
-  name: string;
-  price: number;
-  change: number;
-  changePercent: number;
-  volume: number;
-  high: number;
-  low: number;
-  high52: number;
-  low52: number;
-  sector: string;
-};
+export type StockData = MarketQuote & { sector: string };
 
 export const BIST_SYMBOLS = ["A1CAP","A1YEN","AAGYO","ACSEL","ADEL","ADESE","ADGYO","AEFES","AFYON","AGESA","AGHOL","AGROT","AGYO","AHGAZ","AHSGY","AKBNK","AKCNS","AKENR","AKFGY","AKFIS","AKFYE","AKGRT","AKHAN","AKMGY","AKSA","AKSEN","AKSGY","AKSUE","AKYHO","ALARK","ALBRK","ALCAR","ALCTL","ALFAS","ALGYO","ALKA","ALKIM","ALKLC","ALTNY","ALVES","ANELE","ANGEN","ANHYT","ANSGR","ARASE","ARCLK","ARDYZ","ARENA","ARFYE","ARMGD","ARSAN","ARTMS","ARZUM","ASELS","ASGYO","ASTOR","ASUZU","ATAGY","ATAKP","ATATP","ATATR","ATEKS","ATLAS","ATSYH","AVGYO","AVHOL","AVOD","AVPGY","AVTUR","AYCES","AYDEM","AYEN","AYES","AYGAZ","AZTEK","BAGFS","BAHKM","BAKAB","BALAT","BALSU","BANVT","BARMA","BASCM","BASGZ","BAYRK","BEGYO","BERA","BESLR","BESTE","BEYAZ","BFREN","BIENY","BIGCH","BIGEN","BIGTK","BIMAS","BINBN","BINHO","BIOEN","BIZIM","BJKAS","BLCYT","BLUME","BMSCH","BMSTL","BNTAS","BOBET","BORLS","BORSK","BOSSA","BRISA","BRKO","BRKSN","BRKVY","BRLSM","BRMEN","BRSAN","BRYAT","BSOKE","BTCIM","BUCIM","BULGS","BURCE","BURVA","BVSAN","BYDNR","CANTE","CASA","CATES","CCOLA","CELHA","CEMAS","CEMTS","CEMZY","CEOEM","CGCAM","CIMSA","CLEBI","CMBTN","CMENT","CONSE","COSMO","CRDFA","CRFSA","CUSAN","CVKMD","CWENE","DAGI","DAPGM","DARDL","DCTTR","DENGE","DERHL","DERIM","DESA","DESPC","DEVA","DGATE","DGGYO","DGNMO","DIRIT","DITAS","DMRGD","DMSAS","DNISI","DOAS","DOCO","DOFER","DOFRB","DOGUB","DOHOL","DOKTA","DSTKF","DUNYH","DURDO","DURKN","DYOBY","DZGYO","EBEBK","ECILC","ECOGR","ECZYT","EDATA","EDIP","EFOR","EGEEN","EGEGY","EGEPO","EGGUB","EGPRO","EGSER","EKDMR","EKGYO","EKIZ","EKOS","EKSUN","ELITE","EMKEL","EMNIS","EMPAE","ENDAE","ENERY","ENJSA","ENKAI","ENPRA","ENSRI","ENTRA","EPLAS","ERBOS","ERCB","EREGL","ERSU","ESCAR","ESCOM","ESEN","ETILR","ETYAT","EUHOL","EUKYO","EUPWR","EUREN","EUYO","EYGYO","FADE","FENER","FLAP","FMIZP","FONET","FORMT","FORTE","FRIGO","FRMPL","FROTO","FZLGY","GARAN","GARFA","GATEG","GEDIK","GEDZA","GENIL","GENKM","GENTS","GEREL","GESAN","GIPTA","GLBMD","GLCVY","GLRMK","GLRYH","GLYHO","GMTAS","GOKNR","GOLDA","GOLTS","GOODY","GOZDE","GRNYO","GRSEL","GRTHO","GSDDE","GSDHO","GSRAY","GUBRF","GUNDG","GWIND","GZNMI","HALKB","HATEK","HATSN","HDFGS","HEDEF","HEKTS","HKTM","HLGYO","HOROZ","HRKET","HTTBT","HUBVC","HUNER","HURGZ","ICBCT","ICUGS","IDGYO","IEYHO","IHAAS","IHEVA","IHGZT","IHLAS","IHLGM","IHYAY","IMASM","INDES","INFO","INGRM","INTEK","INTEM","INVEO","INVES","ISATR","ISBIR","ISBTR","ISCTR","ISDMR","ISFIN","ISGSY","ISGYO","ISKPL","ISKUR","ISMEN","ISSEN","ISYAT","IZENR","IZFAS","IZINV","IZMDC","JANTS","KAPLM","KAREL","KARSN","KARTN","KATMR","KAYSE","KBORU","KCAER","KCHOL","KENT","KERVN","KFEIN","KGYO","KIMMR","KLGYO","KLKIM","KLMSN","KLNMA","KLRHO","KLSER","KLSYN","KLYPV","KMPUR","KNFRT","KOCMT","KONKA","KONTR","KONYA","KOPOL","KORDS","KOTON","KRDMA","KRDMB","KRDMD","KRGYO","KRONT","KRPLS","KRSTL","KRTEK","KRVGD","KSTUR","KTLEV","KTSKR","KUTPO","KUVVA","KUYAS","KZBGY","KZGYO","LIDER","LIDFA","LILAK","LINK","LKMNH","LMKDC","LOGO","LRSHO","LUKSK","LXGYO","LYDHO","LYDYE","MAALT","MACKO","MAGEN","MAKIM","MAKTK","MANAS","MARBL","MARKA","MARMR","MARTI","MAVI","MCARD","MEDTR","MEGAP","MEGMT","MEKAG","MEPET","MERCN","MERIT","MERKO","METRO","MEYSU","MGROS","MHRGY","MIATK","MMCAS","MNDRS","MNDTR","MOBTL","MOGAN","MOPAS","MPARK","MRGYO","MRSHL","MSGYO","MTRKS","MTRYO","MZHLD","NATEN","NETAS","NETCD","NIBAS","NTGAZ","NTHOL","NUGYO","NUHCM","OBAMS","OBASE","ODAS","ODINE","OFSYM","ONCSM","ONRYT","ORCAY","ORGE","ORMA","ORZAX","OSMEN","OSTIM","OTKAR","OTTO","OYAKC","OYAYO","OYLUM","OYYAT","OZATD","OZGYO","OZKGY","OZRDN","OZSUB","OZYSR","PAGYO","PAHOL","PAMEL","PAPIL","PARSN","PASEU","PATEK","PCILT","PEKGY","PENGD","PENTA","PETKM","PETUN","PGSUS","PINSU","PKART","PKENT","PLTUR","PNLSN","PNSUT","POLHO","POLTK","PRDGS","PRKAB","PRKME","PRZMA","PSDTC","PSGYO","QNBFK","QNBTR","QUAGR","RALYH","RAYSG","REEDR","RGYAS","RNPOL","RODRG","RTALB","RUBNS","RUZYE","RYGYO","RYSAS","SAFKR","SAHOL","SAMAT","SANEL","SANFM","SANKO","SARKY","SASA","SAYAS","SDTTR","SEGMN","SEGYO","SEKFK","SEKUR","SELEC","SELVA","SERNT","SEYKM","SILVR","SISE","SKBNK","SKTAS","SKYLP","SKYMD","SMART","SMRTG","SMRVA","SNGYO","SNICA","SNPAM","SODSN","SOHOE","SOKE","SOKM","SONME","SRVGY","SUMAS","SUNTK","SURGY","SUWEN","SVGYO","TABGD","TARKM","TATEN","TATGD","TAVHL","TBORG","TCELL","TCKRC","TDGYO","TEHOL","TEKTU","TERA","TEZOL","TGSAS","THYAO","TKFEN","TKNSA","TLMAN","TMPOL","TMSN","TNZTP","TOASO","TRALT","TRCAS","TRENJ","TRGYO","TRHOL","TRILC","TRMET","TSGYO","TSKB","TSPOR","TTKOM","TTRAK","TUCLK","TUKAS","TUPRS","TUREX","TURGG","TURSG","UCAYM","UFUK","ULAS","ULKER","ULUFA","ULUSE","ULUUN","UNLU","USAK","VAKBN","VAKFA","VAKFN","VAKKO","VANGD","VBTYZ","VERTU","VERUS","VESBE","VESTL","VKFYO","VKGYO","VKING","VRGYO","VSNMD","YAPRK","YATAS","YAYLA","YBTAS","YEOTK","YESIL","YGGYO","YIGIT","YKBNK","YKSLN","YONGA","YUNSA","YYAPI","YYLGD","ZEDUR","ZERGY","ZGYO","ZOREN","ZRGYO"];
 
@@ -144,124 +85,26 @@ function formatYfSymbol(sym: string): string {
   return sym.includes(".") ? sym : `${sym}.IS`;
 }
 
-// Toplu veri çekme (batch) — 50'li gruplar halinde
-async function fetchBatch(symbols: string[], batchSize = 50): Promise<StockData[]> {
-  const results: StockData[] = [];
-  for (let i = 0; i < symbols.length; i += batchSize) {
-    const batch = symbols.slice(i, i + batchSize);
-    const batchResults = await Promise.allSettled(
-      batch.map(async (sym) => {
-        const yfSym = formatYfSymbol(sym);
-        const result = await yfFetch(yfSym);
-        const meta = parseMeta(result as Record<string, unknown>);
-        if (!meta) return null;
-        const changePercent = meta.prevClose
-          ? ((meta.price - meta.prevClose) / meta.prevClose) * 100
-          : 0;
-        return {
-          symbol: sym,
-          name: meta.name,
-          price: meta.price,
-          change: meta.change,
-          changePercent,
-          volume: meta.volume,
-          high: meta.high,
-          low: meta.low,
-          high52: meta.high52,
-          low52: meta.low52,
-          sector: SECTOR_MAP[sym] || "Diğer",
-        } as StockData;
-      }),
-    );
-    results.push(
-      ...batchResults
-        .filter((r): r is PromiseFulfilledResult<StockData | null> => r.status === "fulfilled")
-        .map((r) => r.value)
-        .filter(Boolean) as StockData[],
-    );
-  }
-  return results;
-}
-
 export const fetchBistData = createServerFn({ method: "GET" })
-  .validator((input: unknown) => {
-    const obj = input as { limit?: number };
-    return { limit: obj?.limit || 0 };
-  })
+  .validator((input: unknown) => batchInput.parse(input ?? {}))
   .handler(async ({ data }) => {
-    const all = await fetchBatch(BIST_SYMBOLS);
-    return data.limit > 0 ? all.slice(0, data.limit) : all;
+    const symbols = data.limit > 0 ? BIST_SYMBOLS.slice(0, data.limit) : BIST_SYMBOLS;
+    return collectQuotes(symbols, async (symbol): Promise<StockData> => {
+      const quote = parseMeta(await yfFetch(formatYfSymbol(symbol)), formatYfSymbol(symbol));
+      return { ...quote, symbol, sector: SECTOR_MAP[symbol] || "Diğer" };
+    });
   });
 
 export const fetchSingleStock = createServerFn({ method: "GET" })
-  .validator((input: unknown) => {
-    const obj = input as { symbol?: string };
-    return { symbol: (obj?.symbol || "THYAO").toUpperCase() };
-  })
+  .validator((input: unknown) => stockInput.parse(input ?? {}))
   .handler(async ({ data }) => {
-    const result = await yfFetch(formatYfSymbol(data.symbol));
-    return parseMeta(result as Record<string, unknown>);
+    const symbol = formatYfSymbol(data.symbol);
+    return parseMeta(await yfFetch(symbol), symbol);
   });
 
 export const fetchStockHistory = createServerFn({ method: "GET" })
-  .validator((input: unknown) => {
-    const obj = input as { symbol?: string; range?: string };
-    return {
-      symbol: (obj?.symbol || "THYAO").toUpperCase(),
-      range: obj?.range || "1mo",
-    };
-  })
-  .handler(async ({ data }) => {
-    try {
-      const result = await yfFetch(formatYfSymbol(data.symbol), data.range);
-      if (!result?.timestamp || !result?.indicators?.quote?.[0]) return [];
-      const quotes = result.indicators.quote[0];
-      
-      let lastValidClose = 0;
-      
-      // Data Sanitization - Forward Fill
-      const history = result.timestamp.map((ts: number, i: number) => {
-        let close = quotes.close[i];
-        if (close === null || close === undefined || close === 0) {
-          close = lastValidClose;
-        } else {
-          lastValidClose = close;
-        }
-
-        const open = quotes.open[i] || close;
-        const high = quotes.high[i] || close;
-        const low = quotes.low[i] || close;
-        const volume = quotes.volume[i] || 0;
-
-        return {
-          date: new Date(ts * 1000).toISOString(),
-          open,
-          high,
-          low,
-          close,
-          volume,
-        };
-      });
-
-      // Backfill for leading zeros (if the first few records are null/0)
-      const firstValid = history.find((h: any) => h.close > 0)?.close || 0;
-      if (firstValid > 0) {
-        history.forEach((h: any) => {
-          if (h.close === 0) {
-            h.close = firstValid;
-            h.open = firstValid;
-            h.high = firstValid;
-            h.low = firstValid;
-          }
-        });
-      }
-
-      return history;
-    } catch (e) {
-      console.warn("fetchHistory error:", data.symbol, e);
-      return [];
-    }
-  });
+  .validator((input: unknown) => historyInput.parse(input ?? {}))
+  .handler(async ({ data }) => parseHistory(await yfFetch(formatYfSymbol(data.symbol), data.range)));
 
 // ─── News (RSS -> JSON proxy) ──────────────────────────────────────────────
 
@@ -448,33 +291,12 @@ import { runAIEngine, runSimpleTechnicalEngine } from "./ml.engine";
 
 // Fetch history and run ML engine for a single stock
 export const fetchSingleAiAnalysis = createServerFn({ method: "GET" })
-  .validator((input: unknown) => {
-    const obj = input as { symbol?: string; dataCount?: number };
-    return { 
-      symbol: (obj?.symbol || "THYAO").toUpperCase(),
-      dataCount: obj?.dataCount || 252
-    };
-  })
+  .validator((input: unknown) => stockInput.extend({ dataCount: z.number().int().min(50).max(1250).default(252) }).parse(input ?? {}))
   .handler(async ({ data }) => {
-    try {
-      // Fetch maximum available data (e.g. 5y) to ensure we can slice up to dataCount (max ~1250 days)
-      const result = await yfFetch(formatYfSymbol(data.symbol), "5y");
-      if (!result?.timestamp || !result?.indicators?.quote?.[0]) return null;
-      
-      const quotes = result.indicators.quote[0];
-      const history = result.timestamp.map((_ts: number, i: number) => ({
-        close: quotes.close[i],
-        volume: quotes.volume[i],
-      })).filter((h: { close: number; volume: number }) => h.close != null);
-
-      if (history.length < 30) return null;
-      
-      const analysis = await runAIEngine(history, data.symbol, data.dataCount);
-      return { symbol: data.symbol, analysis };
-    } catch (e) {
-      console.warn("fetchSingleAiAnalysis error:", data.symbol, e);
-      return null;
-    }
+    const chart = await yfFetch(formatYfSymbol(data.symbol), "5y");
+    const history = parseHistory(chart);
+    const analysis = await runAIEngine(history, data.symbol, data.dataCount, parseMeta(chart).currency);
+    return { symbol: data.symbol, analysis };
   });
 
 // Fetch history and run Simple Technical Engine for all symbols (AL/SAT only)
@@ -484,37 +306,22 @@ export const fetchTechnicalSignals = createServerFn({ method: "GET" })
   .handler(async () => {
     const bist = BIST_SYMBOLS.slice(0, 80).map((s) => `${s}.IS`);
     const allSymbols = Array.from(new Set([...bist, ...GLOBAL_SYMBOLS]));
-    const results: { symbol: string; analysis: { decision: string; rawScore: number; currentPrice: number } }[] = [];
+    const results: { symbol: string; currency: string; analysis: { decision: string; rawScore: number; currentPrice: number } }[] = [];
     
+    let loadedCount = 0;
     const CONCURRENCY = 10;
     for (let i = 0; i < allSymbols.length; i += CONCURRENCY) {
       const batch = allSymbols.slice(i, i + CONCURRENCY);
       const batchResults = await Promise.allSettled(
         batch.map(async (fullSymbol) => {
           const sym = fullSymbol.replace(".IS", "");
-          const url = `https://query1.finance.yahoo.com/v8/finance/chart/${fullSymbol}?range=3mo&interval=1d`;
-          const res = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0" } });
-          if (!res.ok) return null;
-          const json = await res.json();
-          const closes = json?.chart?.result?.[0]?.indicators?.quote?.[0]?.close as (number | null)[] | undefined;
-          if (!closes) return null;
-          
-          let lastValid = 0;
-          const cleanedCloses = closes.map((c) => {
-            if (c === null || c === undefined || c === 0) {
-               return lastValid;
-            }
-            lastValid = c;
-            return c;
-          });
-          
-          const firstValidClose = cleanedCloses.find((c) => c > 0) || 0;
-          const history = cleanedCloses.map((c) => ({ close: c === 0 ? firstValidClose : c }));
-          
-          if (history.length < 30) return null;
+          const chart = await yfFetch(fullSymbol, "3mo");
+          const history = parseHistory(chart);
+          loadedCount++;
+          if (history.length < 50) return null;
           const analysis = runSimpleTechnicalEngine(history, sym);
           if (analysis.decision === "AL" || analysis.decision === "SAT") {
-            return { symbol: sym, analysis };
+            return { symbol: sym, currency: parseMeta(chart).currency, analysis };
           }
           return null;
         })
@@ -524,6 +331,7 @@ export const fetchTechnicalSignals = createServerFn({ method: "GET" })
       }
     }
     
+    if (!loadedCount) throw new Error("Teknik sinyal verisi alınamadı.");
     results.sort((a, b) => b.analysis.rawScore - a.analysis.rawScore);
     return results;
   });
@@ -531,13 +339,7 @@ export const fetchTechnicalSignals = createServerFn({ method: "GET" })
 // ─── Kronos Foundation Model Prediction ─────────────────────────────────────
 
 export const fetchKronosPrediction = createServerFn({ method: "GET" })
-  .validator((input: unknown) => {
-    const obj = input as { symbol?: string; predDays?: number };
-    return {
-      symbol: (obj?.symbol || "THYAO").toUpperCase(),
-      predDays: obj?.predDays || 14,
-    };
-  })
+  .validator((input: unknown) => stockInput.extend({ predDays: z.number().int().min(1).max(120).default(14) }).parse(input ?? {}))
   .handler(async ({ data }) => {
     try {
       const yfSym = formatYfSymbol(data.symbol);
@@ -574,9 +376,9 @@ export const fetchKronosPrediction = createServerFn({ method: "GET" })
         return { symbol: data.symbol, error: "Beklenmeyen API yanıtı", predictions: [] };
       }
 
-      const candles = json.forecast.candles;
+      const candles = z.array(z.object({ time: z.number().finite(), open: z.number().finite().positive(), high: z.number().finite().positive(), low: z.number().finite().positive(), close: z.number().finite().positive() })).parse(json.forecast.candles);
 
-      const predictions = candles.map((c: any) => ({
+      const predictions = candles.map((c) => ({
         timestamp: new Date(c.time * 1000).toISOString(),
         open: c.open,
         high: c.high,

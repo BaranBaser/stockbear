@@ -1,8 +1,10 @@
+import { MarketDataStatus } from "@/components/MarketDataStatus";
+import { useBistData } from "@/lib/useBistData";
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { AppShell, PageHeader, Sparkline, genLine } from "@/components/AppShell";
+import { AppShell, PageHeader, Sparkline } from "@/components/AppShell";
 import { stocks, findStock, SECTOR_MAP } from "@/lib/market-data";
 import { useServerFn } from "@tanstack/react-start";
-import { fetchSingleStock, fetchStockHistory, fetchBistData, fetchSingleAiAnalysis, fetchKronosPrediction } from "@/lib/ai.functions";
+import { fetchSingleStock, fetchStockHistory, fetchSingleAiAnalysis, fetchKronosPrediction } from "@/lib/ai.functions";
 import { useQuery } from "@tanstack/react-query";
 import { TrendingUp, TrendingDown, Star, RefreshCw, BarChart3, Activity, Clock, Target, Zap, Search, Brain } from "lucide-react";
 import { useWatchlist } from "@/lib/storage";
@@ -19,13 +21,13 @@ export const Route = createFileRoute("/analiz")({
 function AnalizPage() {
   const { symbol } = Route.useSearch();
   const selectedSymbol = (symbol || "THYAO").toUpperCase();
-  const staticStock = findStock(selectedSymbol) || stocks[0];
+  const staticStock = findStock(selectedSymbol);
   const watch = useWatchlist();
   const [timeRange, setTimeRange] = useState("1mo");
 
   const fetchSingle = useServerFn(fetchSingleStock);
   const fetchHistory = useServerFn(fetchStockHistory);
-  const fetchBist = useServerFn(fetchBistData);
+
   const fetchAi = useServerFn(fetchSingleAiAnalysis);
   const fetchKronos = useServerFn(fetchKronosPrediction);
   const [searchQuery, setSearchQuery] = useState("");
@@ -34,46 +36,30 @@ function AnalizPage() {
   const [shareCount, setShareCount] = useState(1);
   const [kronosDays, setKronosDays] = useState(14);
 
-  const { data: liveStock, isLoading: loadingLive } = useQuery({
+  const { data: liveStock, isLoading: loadingLive, isError: priceError, isFetching: priceFetching, refetch: refreshPrice } = useQuery({
     queryKey: ["stock-live", selectedSymbol],
-    queryFn: async () => {
-      try {
-        const result = await fetchSingle({ data: { symbol: selectedSymbol } });
-        return result;
-      } catch (e) { console.warn("fetchSingleStock error:", e);
-        return null;
-      }
-    },
+    queryFn: () => fetchSingle({ data: { symbol: selectedSymbol } }),
+    retry: false,
+    refetchInterval: 120_000,
     staleTime: 60_000,
     throwOnError: false,
   });
 
-  const { data: history = [] } = useQuery({
+  const { data: history = [], isLoading: historyLoading, isError: historyError, refetch: refreshHistory } = useQuery({
     queryKey: ["stock-history", selectedSymbol, timeRange],
-    queryFn: async (): Promise<Array<{ date: string; open: number; high: number; low: number; close: number; volume: number }>> => {
-      try {
-        const result = await fetchHistory({ data: { symbol: selectedSymbol, range: timeRange } });
-        return result ?? [];
-      } catch (e) { console.warn("fetchStockHistory error:", e);
-        return [];
-      }
-    },
+    queryFn: () => fetchHistory({ data: { symbol: selectedSymbol, range: timeRange } }),
+    retry: false,
     staleTime: 300_000,
     throwOnError: false,
   });
 
-  const { data: liveData = [] } = useQuery({
-    queryKey: ["bist-data"],
-    queryFn: async () => {
-      try { return await fetchBist({}); } catch (e) { console.warn("fetchBistData error:", e); return []; }
-    },
-    staleTime: 60_000,
-  });
+  const market = useBistData();
+  const liveData = market.stocks;
 
-  const { data: aiData, isLoading: loadingAi } = useQuery({
+  const { data: aiData, isLoading: loadingAi, isError: analysisError, refetch: refreshAnalysis } = useQuery({
     queryKey: ["ai-analysis", selectedSymbol],
     queryFn: async () => {
-      try { return await fetchAi({ data: { symbol: selectedSymbol } }); } catch (e) { console.warn("fetchAiAnalysis error:", e); return null; }
+      return fetchAi({ data: { symbol: selectedSymbol } });
     },
     enabled: showAiAnalysis,
     staleTime: 5 * 60 * 1000,
@@ -97,8 +83,8 @@ function AnalizPage() {
   });
 
   const popularStocks = useMemo(() => {
-    let source = liveData.length > 0 ? liveData : stocks;
-    return [...source].sort((a, b) => (b.volume || 0) - (a.volume || 0)).slice(0, 15);
+    const source = liveData;
+    return source.length ? [...source].sort((a, b) => b.volume - a.volume).slice(0, 15) : stocks.slice(0, 15);
   }, [liveData]);
 
   const searchResults = useMemo(() => {
@@ -107,21 +93,16 @@ function AnalizPage() {
     return stocks.filter(s => s.symbol.toLowerCase().includes(q) || s.name.toLowerCase().includes(q)).slice(0, 10);
   }, [searchQuery]);
 
-  const stock = liveStock
-    ? {
-        ...staticStock,
-        name: liveStock.name || staticStock.name,
-        price: liveStock.price || staticStock.price,
-        change: liveStock.changePercent ?? staticStock.change,
-        volume: liveStock.volume || staticStock.volume,
-        high52: liveStock.high52 || staticStock.high52,
-        low52: liveStock.low52 || staticStock.low52,
-      }
-    : staticStock;
+  const stock = {
+    symbol: selectedSymbol, name: liveStock?.name ?? staticStock?.name ?? selectedSymbol,
+    sector: SECTOR_MAP[selectedSymbol] || staticStock?.sector || "Diğer", price: liveStock?.price ?? 0,
+    change: liveStock?.changePercent ?? 0, volume: liveStock?.volume ?? 0,
+    high52: liveStock?.high52 ?? 0, low52: liveStock?.low52 ?? 0, pe: 0, marketCap: 0,
+  };
 
   // Gerçek teknik hesaplamalar
   const technicals = useMemo(() => {
-    if (history.length < 5) return null;
+    if (history.length < 50) return null;
     const closes = history.map((h) => h.close).filter(Boolean) as number[];
     const highs = history.map((h) => h.high ?? h.close * 1.01).filter(Boolean) as number[];
     const lows = history.map((h) => h.low ?? h.close * 0.99).filter(Boolean) as number[];
@@ -176,9 +157,7 @@ function AnalizPage() {
 
   const color = stock.change >= 0 ? "oklch(0.72 0.19 145)" : "oklch(0.65 0.22 25)";
 
-  const chartData = history.length > 0
-    ? history.map((h) => h.close)
-    : genLine(selectedSymbol.charCodeAt(0), 30, stock.change >= 0 ? "up" : "down");
+  const chartData = history.map(h => h.close);
 
   const ranges = [
     { k: "5d", l: "5G" },
@@ -199,7 +178,7 @@ function AnalizPage() {
             {liveStock && (
               <span className="text-xs text-muted-foreground flex items-center gap-1">
                 <span className="w-2 h-2 rounded-full bg-[color:var(--success)] animate-pulse" />
-                Canlı
+                Sağlayıcı verisi
               </span>
             )}
             <button onClick={() => watch.toggle(stock.symbol)} className="inline-flex items-center gap-2 bg-secondary border border-border rounded-lg px-3 py-2 text-sm hover:border-primary/40">
@@ -217,6 +196,7 @@ function AnalizPage() {
         }
       />
 
+      <MarketDataStatus isLoading={loadingLive} isFetching={priceFetching} isError={priceError} hasData={!!liveStock} asOf={liveStock?.asOf} onRetry={() => refreshPrice()} />
       {/* Hızlı seçim ve Arama */}
       <div className="flex flex-col lg:flex-row gap-4 items-start lg:items-center justify-between mb-4">
         <div className="flex flex-wrap gap-2 flex-1">
@@ -283,6 +263,7 @@ function AnalizPage() {
               </div>
             </div>
             
+            {analysisError && <p role="alert" className="text-sm text-destructive">Analiz hesaplanamadı. <button className="underline" onClick={() => refreshAnalysis()}>Tekrar dene</button></p>}
             <AiAnalysisResult
               analysis={aiData?.analysis || null}
               shareCount={shareCount}
@@ -297,7 +278,7 @@ function AnalizPage() {
         </div>
       )}
 
-      <div className="grid lg:grid-cols-3 gap-4">
+      {liveStock && <div className="grid lg:grid-cols-3 gap-4">
         {/* Sol kolon — Grafik ve temel bilgiler */}
         <div className="lg:col-span-2 space-y-4">
           <div className="rounded-xl border border-border bg-card p-5">
@@ -325,7 +306,8 @@ function AnalizPage() {
               ))}
             </div>
 
-            <Sparkline data={chartData} color={color} height={260} width={800} />
+            <MarketDataStatus isLoading={historyLoading} isError={historyError} hasData={history.length > 0} asOf={history.at(-1)?.date} onRetry={() => refreshHistory()} label="Son mum zamanı" />
+            {chartData.length > 1 && <Sparkline data={chartData} color={color} height={260} width={800} />}
 
             {history.length > 0 && (
               <div className="flex items-center gap-1 mt-2 text-[10px] text-muted-foreground">
@@ -336,9 +318,9 @@ function AnalizPage() {
 
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-6 pt-6 border-t border-border">
               {[
-                { l: "Hacim", v: `${(stock.volume / 1e9).toFixed(2)} Mlr TL` },
-                { l: "Piyasa Değeri", v: `${(stock.marketCap / 1e9).toFixed(0)} Mlr TL` },
-                { l: "F/K Oranı", v: stock.pe.toFixed(1) },
+                { l: "Hacim", v: `${(stock.volume / 1e6).toFixed(2)} Mn lot` },
+                { l: "Piyasa Değeri", v: "Veri sağlanmıyor" },
+                { l: "F/K Oranı", v: "Veri sağlanmıyor" },
                 { l: "52H Aralığı", v: `${stock.low52} - ${stock.high52}` },
               ].map((k) => (
                 <div key={k.l}><div className="text-xs text-muted-foreground">{k.l}</div><div className="text-sm font-semibold mt-1">{k.v}</div></div>
@@ -346,6 +328,7 @@ function AnalizPage() {
             </div>
           </div>
 
+          {history.length > 0 && history.length < 50 && <p className="text-sm text-muted-foreground">Teknik göstergeler için en az 50 geçerli günlük mum gerekiyor. Daha uzun bir tarih aralığı seçin.</p>}
           {/* Teknik göstergeler — gerçek hesaplamalar */}
           {technicals && (
             <div className="rounded-xl border border-border bg-card p-5">
@@ -367,7 +350,7 @@ function AnalizPage() {
                   { name: "Stochastic %K", value: technicals.stochastic.k.toFixed(1), signal: technicals.stochasticSignal },
                   { name: "ADX", value: technicals.adx.toFixed(1), signal: technicals.adxSignal },
                   { name: "CCI", value: technicals.cci.toFixed(0), signal: technicals.cciSignal },
-                  { name: "Volatilite", value: `${technicals.volatility.toFixed(1)}%`, signal: technicals.volatility > 40 ? "YÜKSEK" : technicals.volatility < 20 ? "DÜŞÜK" : "NORMAL" },
+                  { name: "Yıllık volatilite", value: `${technicals.volatility.toFixed(1)}%`, signal: technicals.volatility > 40 ? "YÜKSEK" : technicals.volatility < 20 ? "DÜŞÜK" : "NORMAL" },
                   { name: "Değişim (5G)", value: `${technicals.priceChange5d >= 0 ? "+" : ""}${technicals.priceChange5d.toFixed(2)}%`, signal: technicals.priceChange5d > 0 ? "POZİTİF" : "NEGATİF" },
                   { name: "ATR", value: `${technicals.atr.toFixed(2)} TL`, signal: technicals.atr > stock.price * 0.03 ? "YÜKSEK" : "NORMAL" },
                 ].map((g) => (
@@ -444,13 +427,13 @@ function AnalizPage() {
             </div>
             <div className="space-y-2">
               {[
-                { l: "Günün Açılışı", v: history.length > 0 && history[0]?.open != null ? `${history[0].open.toFixed(2)} TL` : "-" },
-                { l: "Gün İçi En Yüksek", v: history.length > 0 ? `${Math.max(...history.map(h => h.high ?? h.close)).toFixed(2)} TL` : "-" },
-                { l: "Gün İçi En Düşük", v: history.length > 0 ? `${Math.min(...history.map(h => h.low ?? h.close)).toFixed(2)} TL` : "-" },
+                { l: "Günün Açılışı", v: history.length > 0 && history.at(-1)?.open != null ? `${history.at(-1)!.open.toFixed(2)} TL` : "-" },
+                { l: "Gün İçi En Yüksek", v: history.length > 0 ? `${history.at(-1)!.high.toFixed(2)} TL` : "-" },
+                { l: "Gün İçi En Düşük", v: history.length > 0 ? `${history.at(-1)!.low.toFixed(2)} TL` : "-" },
                 { l: "52 Hafta Yüksek", v: `${stock.high52} TL` },
                 { l: "52 Hafta Düşük", v: `${stock.low52} TL` },
                 { l: "52H Orta Nokta", v: `${((stock.high52 + stock.low52) / 2).toFixed(2)} TL` },
-                { l: "Fiyat / 52H Yüksek", v: `${((stock.price / stock.high52) * 100).toFixed(1)}%` },
+                { l: "Fiyat / 52H Yüksek", v: stock.high52 > 0 ? `${((stock.price / stock.high52) * 100).toFixed(1)}%` : "—" },
               ].map((item) => (
                 <div key={item.l} className="flex items-center justify-between text-xs">
                   <span className="text-muted-foreground">{item.l}</span>
@@ -484,11 +467,12 @@ function AnalizPage() {
           <div className="rounded-xl border border-primary/30 p-5" style={{ background: "linear-gradient(135deg, oklch(0.22 0.05 82 / 0.3), oklch(0.18 0.01 260))" }}>
             <div className="text-sm font-semibold">Veri Kaynağı</div>
             <p className="text-xs text-muted-foreground mt-2">
-              Fiyatlar Yahoo Finance tarafından sağlanmaktadır. 15 dakika gecikmelidir. Teknik göstergeler gerçek fiyat verilerinden hesaplanmıştır. Yatırım tavsiyesi değildir.
+              Fiyatlar Yahoo Finance tarafından sağlanmaktadır. Veriler gecikmeli olabilir. Teknik göstergeler gerçek fiyat verilerinden hesaplanmıştır. Yatırım tavsiyesi değildir.
             </p>
           </div>
         </div>
       </div>
+      }
     </AppShell>
   );
 }

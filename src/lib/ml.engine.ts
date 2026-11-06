@@ -1,6 +1,12 @@
 // ml.engine.ts
 // Kapsamlı Algoritmik ve Matematiksel Karar Motoru (LLM veya dış API kullanılmaz)
 
+export type AnalysisCandle = { close: number; high: number; low: number; volume: number };
+export function validateAnalysisCandles(history: AnalysisCandle[]) {
+  if (history.length < 50) throw new Error("Analiz için en az 50 geçerli günlük mum gerekir.");
+  if (history.some(c => ![c.close, c.high, c.low, c.volume].every(Number.isFinite) || c.close <= 0 || c.low <= 0 || c.low > c.close || c.high < c.close || c.volume < 0)) throw new Error("Geçersiz OHLCV verisi.");
+}
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export type MLModelName = "RidgeRegression" | "MomentumExtrapolation" | "MeanReversion" | "EMA_Projection";
@@ -9,7 +15,7 @@ export interface ModelPrediction {
   model: MLModelName;
   prediction: number;
   weight: number;
-  rmse: number;
+  mape: number | null;
 }
 
 export interface HorizonPrediction {
@@ -18,9 +24,10 @@ export interface HorizonPrediction {
   lowerBand: number;
   upperBand: number;
   expectedReturnPercent: number;
-  confidence: number;
-  rmse: number;
+  evaluationScore: number | null;
+  mape: number | null;
   models: ModelPrediction[];
+  evaluationSamples?: number;
 }
 
 export interface KronosPrediction {
@@ -32,8 +39,9 @@ export interface KronosPrediction {
 }
 
 export interface EngineResult {
+  currency: string;
   decision: "AL" | "SAT" | "BEKLE";
-  confidenceScore: number;
+  signalScore: number;
   rawScore: number;
   currentPrice: number;
   volatility: number;
@@ -56,7 +64,7 @@ export interface EngineResult {
   riskManagement: {
     suggestedStopLoss: number;
     suggestedTakeProfit: number;
-    suggestedPositionSize: number;
+    suggestedPositionSize: number | null;
     riskRewardRatio: number;
   };
   supportLevels: number[];
@@ -76,12 +84,13 @@ export interface SimpleTechnicalResult {
 
 /** Compute annualized volatility from daily closes (%). */
 export function calcVolatility(closes: number[]): number {
-  if (closes.length < 2) return 0;
-  const slice = closes.slice(-Math.min(60, closes.length));
-  const mean = slice.reduce((a, b) => a + b, 0) / slice.length;
-  const variance = slice.reduce((a, v) => a + Math.pow(v - mean, 2), 0) / slice.length;
-  const dailyStd = Math.sqrt(variance);
-  return mean > 0 ? (dailyStd / mean) * 100 : 0;
+  if (closes.some(price => !Number.isFinite(price) || price <= 0)) throw new Error("Volatilite için geçerli fiyatlar gereklidir.");
+  const prices = closes.slice(-61);
+  if (prices.length < 3) return 0;
+  const returns = prices.slice(1).map((price, i) => Math.log(price / prices[i]));
+  const mean = returns.reduce((sum, r) => sum + r, 0) / returns.length;
+  const variance = returns.reduce((sum, r) => sum + (r - mean) ** 2, 0) / (returns.length - 1);
+  return Math.sqrt(variance * 252) * 100;
 }
 
 // ─── Core Indicators ─────────────────────────────────────────────────────────
@@ -487,8 +496,8 @@ export function interpolatePredictions(
   const interpExpected = interpolateNumericValues(xs, basePredictions.map((p) => p.expectedPrice), targetHorizons);
   const interpLower = interpolateNumericValues(xs, basePredictions.map((p) => p.lowerBand), targetHorizons);
   const interpUpper = interpolateNumericValues(xs, basePredictions.map((p) => p.upperBand), targetHorizons);
-  const interpConfidence = interpolateNumericValues(xs, basePredictions.map((p) => p.confidence), targetHorizons);
-  const interpRmse = interpolateNumericValues(xs, basePredictions.map((p) => p.rmse), targetHorizons);
+  const interpScore = interpolateNumericValues(xs, basePredictions.map((p) => p.evaluationScore ?? 0), targetHorizons);
+  const interpMape = interpolateNumericValues(xs, basePredictions.map((p) => p.mape ?? 0), targetHorizons);
 
   return targetHorizons.map((h, i) => ({
     horizonDays: h,
@@ -496,178 +505,106 @@ export function interpolatePredictions(
     lowerBand: interpLower[i],
     upperBand: interpUpper[i],
     expectedReturnPercent: ((interpExpected[i] - currentPrice) / currentPrice) * 100,
-    confidence: Math.max(10, Math.min(99, interpConfidence[i])),
-    rmse: interpRmse[i],
+    evaluationScore: basePredictions.some(p => p.evaluationScore === null) ? null : Math.max(10, Math.min(99, interpScore[i])),
+    mape: basePredictions.some(p => p.mape === null) ? null : interpMape[i],
     models: basePredictions[Math.min(i, basePredictions.length - 1)].models,
   }));
 }
 
-// ─── Walk-Forward Backtest ────────────────────────────────────────────────────
+// ─── Forecast evaluation ────────────────────────────────────────────────────
 
-async function walkForwardBacktest(
-  closes: number[],
-  horizon: number,
-): Promise<{ rmse: number; accuracy: number }> {
-  const testPoints = [0.6, 0.7, 0.8, 0.9, 0.95].map((p) => Math.floor(closes.length * p));
-  const validPoints = testPoints.filter((i) => i + horizon < closes.length);
+const FORECAST_MODELS: Array<{ name: MLModelName; fn: (closes: number[], horizon: number) => number }> = [
+  { name: "RidgeRegression", fn: predictRidgeRegression },
+  { name: "MomentumExtrapolation", fn: predictMomentum },
+  { name: "MeanReversion", fn: predictMeanReversion },
+  { name: "EMA_Projection", fn: predictEMAProjection },
+];
 
-  let totalError = 0;
-  let correctDirection = 0;
-  let count = 0;
-
-  const fns = [predictRidgeRegression, predictMomentum, predictMeanReversion, predictEMAProjection];
-
-  for (const i of validPoints) {
-    const sliceLen = i + 1;
-    const actual = closes[i + horizon];
-    const current = closes[i];
-
-    const rmseArr: number[] = [];
-    for (const fn of fns) {
-      let err = 0;
-      let testCount = 0;
-      const subPoints = [0.5, 0.65, 0.8].map((p) => Math.floor(sliceLen * p));
-      for (const sp of subPoints) {
-        if (sp + horizon >= sliceLen) continue;
-        const subSlice = closes.slice(0, sp + 1);
-        const subActual = closes[sp + horizon];
-        const subPred = fn(subSlice, horizon);
-        err += Math.abs(subPred - subActual) / subActual;
-        testCount++;
-      }
-      rmseArr.push(testCount > 0 ? err / testCount * 100 : 10);
-    }
-
-    const invRmse = rmseArr.map((r) => 1 / Math.max(r, 0.1));
-    const totalInv = invRmse.reduce((a, b) => a + b, 0);
-    const weights = invRmse.map((r) => r / totalInv);
-
-    const mainSlice = closes.slice(0, sliceLen);
-    let predicted = 0;
-    for (let m = 0; m < fns.length; m++) {
-      predicted += fns[m](mainSlice, horizon) * weights[m];
-    }
-
-    totalError += Math.abs(predicted - actual) / actual;
-    if ((predicted > current) === (actual > current)) correctDirection++;
-    count++;
-  }
-
-  return {
-    rmse: count > 0 ? (totalError / count) * 100 : 10,
-    accuracy: count > 0 ? (correctDirection / count) * 100 : 50,
-  };
+function boundedPrediction(fn: (c: number[], h: number) => number, closes: number[], horizon: number) {
+  const current = closes[closes.length - 1];
+  return Math.max(current * 0.5, Math.min(current * 1.5, fn(closes, horizon)));
 }
 
-// ─── Ensemble Prediction ─────────────────────────────────────────────────────
+function evaluationPoints(length: number, horizon: number) {
+  return [...new Set([0.5, 0.6, 0.7, 0.8, 0.9, 0.95].map(fraction => Math.floor(length * fraction)))].filter(i => i >= 29 && i + horizon < length);
+}
 
-async function calculateEnsemblePrediction(
-  closes: number[],
-  horizon: number,
-): Promise<HorizonPrediction> {
-  const currentPrice = closes[closes.length - 1] || 0;
+function modelWeights(closes: number[], horizon: number) {
+  const points = evaluationPoints(closes.length, horizon);
+  const evaluated = FORECAST_MODELS.map(model => {
+    const errors = points.map(i => {
+      const predicted = boundedPrediction(model.fn, closes.slice(0, i + 1), horizon);
+      const actual = closes[i + horizon];
+      return Math.abs(predicted - actual) / actual * 100;
+    });
+    const mape = errors.length ? errors.reduce((sum, error) => sum + error, 0) / errors.length : null;
+    return { ...model, mape, inverseError: mape === null ? 1 : 1 / Math.max(mape, 0.1) };
+  });
+  const total = evaluated.reduce((sum, model) => sum + model.inverseError, 0);
+  return evaluated.map(model => ({ ...model, weight: model.inverseError / total }));
+}
 
-  const models: Array<{ name: MLModelName; fn: (c: number[], h: number) => number }> = [
-    { name: "RidgeRegression", fn: predictRidgeRegression },
-    { name: "MomentumExtrapolation", fn: predictMomentum },
-    { name: "MeanReversion", fn: predictMeanReversion },
-    { name: "EMA_Projection", fn: predictEMAProjection },
-  ];
-
-  // Walk-forward backtest
-  const backtest = await walkForwardBacktest(closes, horizon);
-
-  const evaluatedModels: ModelPrediction[] = [];
-  let totalInverseRmse = 0;
-
-  for (const model of models) {
-    const historicalSlice = closes.slice(0, Math.max(30, closes.length - horizon));
-    const actualTarget = closes[Math.min(closes.length - 1, historicalSlice.length + horizon - 1)] || currentPrice;
-    const predictedTarget = model.fn(historicalSlice, horizon);
-    let rmse = Math.abs(predictedTarget - actualTarget) / (actualTarget || 1) * 100;
-    rmse = Math.max(0.1, Math.min(50, rmse));
-
-    totalInverseRmse += 1 / rmse;
-
-    const futurePrediction = model.fn(closes, horizon);
-    const bounded = Math.max(currentPrice * 0.5, Math.min(currentPrice * 1.5, futurePrediction));
-
-    evaluatedModels.push({ model: model.name, prediction: bounded, weight: 1 / rmse, rmse });
+async function calculateEnsemblePrediction(closes: number[], horizon: number): Promise<HorizonPrediction> {
+  const currentPrice = closes[closes.length - 1];
+  const weights = modelWeights(closes, horizon);
+  const models = weights.map(model => ({ model: model.name, prediction: boundedPrediction(model.fn, closes, horizon), weight: model.weight, mape: model.mape }));
+  const expectedPrice = models.reduce((sum, model) => sum + model.prediction * model.weight, 0);
+  const points = evaluationPoints(closes.length, horizon);
+  let totalError = 0;
+  let directionMatches = 0;
+  // At each historical origin, fit weights using that origin's past only.
+  for (const i of points) {
+    const past = closes.slice(0, i + 1);
+    const predicted = modelWeights(past, horizon).reduce((sum, model) => sum + boundedPrediction(model.fn, past, horizon) * model.weight, 0);
+    const actual = closes[i + horizon];
+    totalError += Math.abs(predicted - actual) / actual * 100;
+    if (Math.sign(predicted - closes[i]) === Math.sign(actual - closes[i])) directionMatches++;
   }
-
-  let finalExpectedPrice = 0;
-  let avgRmse = 0;
-
-  for (const em of evaluatedModels) {
-    const normalizedWeight = em.weight / totalInverseRmse;
-    em.weight = normalizedWeight;
-    finalExpectedPrice += em.prediction * normalizedWeight;
-    avgRmse += em.rmse * normalizedWeight;
-  }
-
-  // Adjust RMSE by walk-forward accuracy
-  avgRmse = avgRmse * (110 - backtest.accuracy) / 100;
-
-  const slice20 = closes.slice(-20);
-  const stdDev =
-    Math.sqrt(
-      slice20.reduce((acc, val) => acc + Math.pow(val - calcSMA(slice20, 20), 2), 0) / 20,
-    ) || currentPrice * 0.02;
-  const bandWidth = stdDev * Math.sqrt(horizon);
-
-  let confidence = backtest.accuracy - avgRmse * 3;
-  confidence = Math.max(10, Math.min(99, confidence));
-
+  const mape = points.length ? totalError / points.length : null;
+  // Heuristic dispersion only: these are not calibrated confidence intervals.
+  const dailyVolatility = calcVolatility(closes) / 100 / Math.sqrt(252);
+  const bandWidth = currentPrice * dailyVolatility * Math.sqrt(horizon);
   return {
-    horizonDays: horizon,
-    expectedPrice: finalExpectedPrice,
-    lowerBand: finalExpectedPrice - bandWidth,
-    upperBand: finalExpectedPrice + bandWidth,
-    expectedReturnPercent: ((finalExpectedPrice - currentPrice) / currentPrice) * 100,
-    confidence,
-    rmse: avgRmse,
-    models: evaluatedModels,
+    horizonDays: horizon, expectedPrice,
+    lowerBand: Math.max(0, expectedPrice - bandWidth), upperBand: expectedPrice + bandWidth,
+    expectedReturnPercent: (expectedPrice / currentPrice - 1) * 100,
+    evaluationScore: points.length ? Math.max(10, Math.min(99, directionMatches / points.length * 100 - (mape ?? 0) * 3)) : null,
+    mape, models, evaluationSamples: points.length,
   };
 }
 
 // ─── Risk Management ─────────────────────────────────────────────────────────
 
-function computeRiskManagement(
-  currentPrice: number,
-  supports: number[],
-  resistances: number[],
-  volatility: number,
-): { suggestedStopLoss: number; suggestedTakeProfit: number; suggestedPositionSize: number; riskRewardRatio: number } {
-  const stopLoss = supports.length > 0 ? supports[0] * 0.98 : currentPrice * (1 - volatility / 100);
-  const takeProfit = resistances.length > 0 ? resistances[0] * 0.98 : currentPrice * (1 + volatility / 100);
-  const risk = currentPrice - stopLoss;
-  const reward = takeProfit - currentPrice;
-  const riskRewardRatio = risk > 0 ? reward / risk : 1;
-  const winRate = 0.55;
-  const kellyFraction = (winRate * riskRewardRatio - (1 - winRate)) / riskRewardRatio;
-  const positionSize = Math.max(0, Math.min(25, kellyFraction * 50));
-  return { suggestedStopLoss: stopLoss, suggestedTakeProfit: takeProfit, suggestedPositionSize: positionSize, riskRewardRatio };
+function computeRiskManagement(currentPrice: number, supports: number[], resistances: number[], atr: number): EngineResult["riskManagement"] {
+  const range = Math.max(atr, currentPrice * 0.01);
+  const support = supports.filter(price => price > 0 && price < currentPrice).sort((a, b) => b - a)[0];
+  const resistance = resistances.filter(price => price * 0.98 > currentPrice).sort((a, b) => a - b)[0];
+  const suggestedStopLoss = Math.max(currentPrice * 0.01, support ? support * 0.98 : currentPrice - 2 * range);
+  const suggestedTakeProfit = resistance ? resistance * 0.98 : currentPrice + 3 * range;
+  return { suggestedStopLoss, suggestedTakeProfit, suggestedPositionSize: null, riskRewardRatio: (suggestedTakeProfit - currentPrice) / (currentPrice - suggestedStopLoss) };
 }
 
 // ─── Main AI Engine ──────────────────────────────────────────────────────────
 
 export async function runAIEngine(
-  history: { close: number; volume: number }[],
+  history: AnalysisCandle[],
   _symbol: string,
   dataCount: number = 252,
+  currency: string = "—",
 ): Promise<EngineResult> {
+  if (!Number.isInteger(dataCount) || dataCount < 50 || dataCount > 1250) throw new Error("Veri sayısı 50–1250 arasında olmalıdır.");
   const slicedHistory = history.slice(-dataCount);
-  if (slicedHistory.length < 30) {
-    throw new Error("Analiz için en az 30 günlük geçmiş veri gereklidir.");
+  validateAnalysisCandles(slicedHistory);
+  if (slicedHistory.length < 50) {
+    throw new Error("Analiz için en az 50 günlük geçmiş veri gereklidir.");
   }
 
   const closes = slicedHistory.map((h) => h.close);
   const volumes = slicedHistory.map((h) => h.volume || 0);
   const currentPrice = closes[closes.length - 1];
 
-  // Generate synthetic high/low if not provided (approximate from close)
-  const highs = closes.map((c) => c * 1.01);
-  const lows = closes.map((c) => c * 0.99);
+  const highs = slicedHistory.map(c => c.high);
+  const lows = slicedHistory.map(c => c.low);
 
   // Core indicators
   const rsi = calcRSI(closes, 14);
@@ -692,7 +629,7 @@ export async function runAIEngine(
   // Predictions
   const horizons = [1, 2, 3, 5, 7, 10, 15, 20, 30, 40, 60, 80, 120];
   const basePredictions = await Promise.all(horizons.map((h) => calculateEnsemblePrediction(closes, h)));
-  const predictions = interpolatePredictions(basePredictions, 30);
+  const predictions = basePredictions;
 
   // ── Scoring ──────────────────────────────────────────────────────────────
   let score = 50;
@@ -717,7 +654,7 @@ export async function runAIEngine(
   if (pred20) {
     if (pred20.expectedReturnPercent > 3) score += 15;
     else if (pred20.expectedReturnPercent < -3) score -= 15;
-    if (pred20.rmse > 10) {
+    if (pred20.mape !== null && pred20.mape > 10) {
       score = score > 50 ? score - 10 : score + 10;
     }
   }
@@ -736,7 +673,9 @@ export async function runAIEngine(
 
   // Volume confirmation
   if (obv > 0 && trend === "YÜKSELEN") score += 5;
-  if (obv < 0 && trend === "DÜŞEN") score += 5;
+  if (obv < 0 && trend === "DÜŞEN") score -= 5;
+
+  if (regime === "RANGING" && score >= 60) score -= 5;
 
   // ── Decision ─────────────────────────────────────────────────────────────
   let decision: "AL" | "SAT" | "BEKLE" = "BEKLE";
@@ -745,22 +684,18 @@ export async function runAIEngine(
 
   // Regime adjustments
   if (regime === "HIGH_VOLATILITY" && decision === "AL") decision = "BEKLE";
-  if (regime === "RANGING" && decision === "AL") score -= 5;
 
   // Safety: high volatility overrides
   if (decision === "AL" && volatility > 25) decision = "BEKLE";
 
-  let finalConfidence = Math.max(10, Math.min(99, score));
-  if (decision === "BEKLE") {
-    finalConfidence = 100 - Math.abs(score - 50) * 2;
-  }
-  finalConfidence = Math.max(10, Math.min(99, finalConfidence));
+  const signalScore = Math.max(0, Math.min(100, score));
 
-  const riskManagement = computeRiskManagement(currentPrice, supports, resistances, volatility);
+  const riskManagement = computeRiskManagement(currentPrice, supports, resistances, atr);
 
   return {
     decision,
-    confidenceScore: finalConfidence,
+    signalScore,
+    currency,
     rawScore: score,
     currentPrice,
     volatility,
@@ -791,14 +726,15 @@ export async function runAIEngine(
 // ─── Simple Technical Engine (lightweight scanner) ───────────────────────────
 
 export function runSimpleTechnicalEngine(
-  history: { close: number; high?: number; low?: number; volume?: number }[],
+  history: AnalysisCandle[],
   _symbol: string,
 ): SimpleTechnicalResult {
+  validateAnalysisCandles(history);
   const closes = history.map((h) => h.close);
   const currentPrice = closes[closes.length - 1];
 
-  const highs = history.map((h) => h.high ?? h.close * 1.01);
-  const lows = history.map((h) => h.low ?? h.close * 0.99);
+  const highs = history.map((h) => h.high);
+  const lows = history.map((h) => h.low);
 
   const rsi = calcRSI(closes, 14);
   const sma20 = calcSMA(closes, 20);

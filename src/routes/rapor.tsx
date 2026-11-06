@@ -1,3 +1,4 @@
+import { MarketDataStatus } from "@/components/MarketDataStatus";
 import { createFileRoute } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { useState, useRef, useMemo, useEffect } from "react";
@@ -28,19 +29,14 @@ function RaporPage() {
   const reportRef = useRef<HTMLDivElement>(null);
   const [generating, setGenerating] = useState(false);
 
-  const { price, changePercent, isLoading: priceLoading } = useLivePrice(symbol);
+  const quote = useLivePrice(symbol);
+  const { price, changePercent, isLoading: priceLoading, hasData } = quote;
   const fetchHistory = useServerFn(fetchStockHistory);
 
-  const { data: history = [], isLoading: historyLoading } = useQuery({
+  const { data: history = [], isLoading: historyLoading, isError: historyError } = useQuery({
     queryKey: ["stock-history", symbol, "6mo"],
-    queryFn: async () => {
-      try {
-        const r = await fetchHistory({ data: { symbol, range: "6mo" } });
-        return r ?? [];
-      } catch (e) { console.warn("fetchRaporHistory error:", e);
-        return [];
-      }
-    },
+    queryFn: () => fetchHistory({ data: { symbol, range: "6mo" } }),
+    retry: false,
     staleTime: 300_000,
     throwOnError: false,
   });
@@ -50,16 +46,16 @@ function RaporPage() {
   const isLoading = priceLoading || historyLoading;
 
   useEffect(() => {
-    if (history.length < 30) {
+    if (history.length < 50) {
       setAnalysis(null);
       return;
     }
     let cancelled = false;
-    runAIEngine(history.map((p: { close: number; volume: number }) => ({ close: p.close, volume: p.volume || 0 })), symbol)
+    runAIEngine(history, symbol, 252, quote.data?.currency)
       .then((r) => { if (!cancelled) setAnalysis(r); })
       .catch(() => { if (!cancelled) setAnalysis(null); });
     return () => { cancelled = true; };
-  }, [history, symbol]);
+  }, [history, symbol, quote.data?.currency]);
 
   const stockName = useMemo(
     () => stocks.find((s) => s.symbol === symbol)?.name || symbol,
@@ -81,7 +77,7 @@ function RaporPage() {
   }, [history]);
 
   const generatePNG = async () => {
-    if (!reportRef.current) return;
+    if (!reportRef.current || !hasData || quote.isError || historyError || history.length < 50) return;
     setGenerating(true);
     try {
       const canvas = await html2canvas(reportRef.current, {
@@ -100,7 +96,7 @@ function RaporPage() {
   };
 
   const generatePDF = async () => {
-    if (!reportRef.current) return;
+    if (!reportRef.current || !hasData || quote.isError || historyError || history.length < 50) return;
     setGenerating(true);
     try {
       const canvas = await html2canvas(reportRef.current, {
@@ -124,6 +120,7 @@ function RaporPage() {
 
   return (
     <AppShell>
+      <MarketDataStatus {...quote} onRetry={() => quote.refetch()} />
       <PageHeader
         title="Rapor Üretici"
         subtitle="Profesyonel analiz raporları oluşturun ve indirin"
@@ -143,7 +140,7 @@ function RaporPage() {
         </div>
         <button
           onClick={generatePNG}
-          disabled={generating || isLoading}
+          disabled={generating || isLoading || !hasData || quote.isError || historyError || history.length < 50}
           className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50"
         >
           {generating ? (
@@ -155,7 +152,7 @@ function RaporPage() {
         </button>
         <button
           onClick={generatePDF}
-          disabled={generating || isLoading}
+          disabled={generating || isLoading || !hasData || quote.isError || historyError || history.length < 50}
           className="flex items-center gap-2 bg-red-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-red-700 disabled:opacity-50"
         >
           {generating ? (
@@ -167,7 +164,7 @@ function RaporPage() {
         </button>
       </div>
 
-      {isLoading ? (
+      {!hasData || historyError ? (<p className="p-6 text-muted-foreground">Rapor için geçerli fiyat ve geçmiş verisi gereklidir.</p>) : isLoading ? (
         <div className="flex items-center justify-center h-64 text-muted-foreground">
           <Loader2 className="w-6 h-6 animate-spin mr-2" /> Rapor
           hazırlanıyor...
@@ -232,9 +229,9 @@ function RaporPage() {
               <div className="flex-1">
                 <div className="grid grid-cols-3 gap-4">
                   <div className="text-center p-3 rounded-lg bg-white/5">
-                    <div className="text-xs text-slate-400">Güven</div>
+                    <div className="text-xs text-slate-400">Teknik puan</div>
                     <div className="text-xl font-bold text-white">
-                      {analysis.confidenceScore}%
+                      {analysis.signalScore.toFixed(0)} / 100
                     </div>
                   </div>
                   <div className="text-center p-3 rounded-lg bg-white/5">

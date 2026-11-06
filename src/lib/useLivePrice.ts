@@ -2,49 +2,24 @@ import { useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { fetchSingleStock } from "@/lib/ai.functions";
 
-type LivePriceResult = {
-  price: number;
-  changePercent: number;
-  volume: number;
-  high: number;
-  low: number;
-  isLoading: boolean;
-  isError: boolean;
-};
-
-export function useLivePrice(symbol: string): LivePriceResult {
+export function useLivePrice(symbol: string) {
   const fetchSingle = useServerFn(fetchSingleStock);
-
-  const { data, isLoading, isError } = useQuery({
+  const query = useQuery({
     queryKey: ["live-price", symbol],
-    queryFn: async () => {
-      try {
-        const result = await fetchSingle({ data: { symbol } });
-        if (result?.price) {
-          const prevClose = (result as unknown as { prevClose?: number }).prevClose;
-          return {
-            price: result.price,
-            changePercent: prevClose ? ((result.price - prevClose) / prevClose) * 100 : 0,
-            volume: result.volume || 0,
-            high: result.high || 0,
-            low: result.low || 0,
-          };
-        }
-      } catch (e) { console.warn("useLivePrice fetch error:", symbol, e); }
-      return { price: 0, changePercent: 0, volume: 0, high: 0, low: 0 };
-    },
+    queryFn: () => fetchSingle({ data: { symbol } }),
     staleTime: 60_000,
     refetchInterval: 120_000,
-    throwOnError: false,
+    retry: false,
   });
-
   return {
-    price: data?.price ?? 0,
-    changePercent: data?.changePercent ?? 0,
-    volume: data?.volume ?? 0,
-    high: data?.high ?? 0,
-    low: data?.low ?? 0,
-    isLoading,
-    isError,
+    ...query,
+    price: query.data?.price ?? 0,
+    changePercent: query.data?.changePercent ?? 0,
+    volume: query.data?.volume ?? 0,
+    high: query.data?.high ?? 0,
+    low: query.data?.low ?? 0,
+    hasData: query.data !== undefined,
+    asOf: query.data?.asOf,
+    source: query.data?.source,
   };
 }

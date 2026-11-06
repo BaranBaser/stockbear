@@ -1,3 +1,4 @@
+import { MarketDataStatus } from "@/components/MarketDataStatus";
 import { createFileRoute } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { useState, useMemo, useCallback } from "react";
@@ -32,11 +33,12 @@ export const Route = createFileRoute("/karsilastir")({
 
 const COLORS = ["#3b82f6", "#ef4444", "#22c55e", "#f59e0b"];
 
-function StockRow({ symbol, index, history }: { symbol: string; index: number; history: Array<{ close: number; volume?: number }> }) {
-  const { price, changePercent } = useLivePrice(symbol);
+function StockRow({ symbol, index, history }: { symbol: string; index: number; history: Array<{ close: number; high: number; low: number; volume: number }> }) {
+  const quote = useLivePrice(symbol);
+  const { price, changePercent, hasData } = quote;
 
   const analysis = useMemo(() => {
-    if (history.length < 30) return null;
+    if (history.length < 50) return null;
     return runSimpleTechnicalEngine(history, symbol);
   }, [history, symbol]);
 
@@ -57,10 +59,11 @@ function StockRow({ symbol, index, history }: { symbol: string; index: number; h
 
   return (
     <div className="rounded-xl border border-border bg-card p-4 space-y-3">
+      <MarketDataStatus {...quote} onRetry={() => quote.refetch()} />
       <div className="flex items-center justify-between">
         <div>
           <div className="text-xs text-muted-foreground">{stockName}</div>
-          <div className="text-xl font-bold">{price.toFixed(2)} TL</div>
+          <div className="text-xl font-bold">{hasData ? `${price.toFixed(2)} TL` : "Fiyat alınamadı"}</div>
           <div
             className={`text-sm font-medium ${
               changePercent >= 0
@@ -69,7 +72,7 @@ function StockRow({ symbol, index, history }: { symbol: string; index: number; h
             }`}
           >
             {changePercent >= 0 ? "+" : ""}
-            {changePercent.toFixed(2)}%
+            {hasData ? `${changePercent.toFixed(2)}%` : "—"}
           </div>
         </div>
         <div

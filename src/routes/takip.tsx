@@ -1,5 +1,6 @@
+import { MarketDataStatus } from "@/components/MarketDataStatus";
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { AppShell, PageHeader, Sparkline, genLine } from "@/components/AppShell";
+import { AppShell, PageHeader, Sparkline } from "@/components/AppShell";
 import { stocks, findStock } from "@/lib/market-data";
 import { useWatchlist } from "@/lib/storage";
 import { useServerFn } from "@tanstack/react-start";
@@ -13,7 +14,7 @@ export const Route = createFileRoute("/takip")({
   head: () => ({
     meta: [
       { title: "Takip Listem — stockbear" },
-      { name: "description", content: "Beğendiğiniz hisseleri takip edin, canlı fiyatlarını izleyin." },
+      { name: "description", content: "Beğendiğiniz hisseleri takip edin, sağlayıcı fiyatlarını izleyin." },
       { property: "og:title", content: "Takip Listem — stockbear" },
     ],
   }),
@@ -21,28 +22,22 @@ export const Route = createFileRoute("/takip")({
 });
 
 function WatchlistCard({ symbol, onToggle }: { symbol: string; onToggle: () => void }) {
-  const { price, changePercent, volume, isLoading } = useLivePrice(symbol);
+  const quote = useLivePrice(symbol);
+  const { price, changePercent, volume, isLoading, hasData } = quote;
   const staticStock = findStock(symbol);
   const fetchHistory = useServerFn(fetchStockHistory);
 
-  const { data: sparklineData = [] } = useQuery({
+  const { data: sparklineData = [], isError: historyError } = useQuery({
     queryKey: ["sparkline", symbol],
-    queryFn: async () => {
-      try {
-        const result = await fetchHistory({ data: { symbol, range: "3mo" } });
-        if (result && result.length > 0) {
-          return result.map((h: { close: number }) => h.close).filter(Boolean);
-        }
-      } catch (e) { console.warn("Sparkline fetch error:", symbol, e); }
-      return [];
-    },
+    queryFn: async () => (await fetchHistory({ data: { symbol, range: "3mo" } })).map(h => h.close),
+    retry: false,
     staleTime: 5 * 60 * 1000,
     throwOnError: false,
   });
 
-  const finalPrice = price || staticStock?.price || 0;
-  const finalChange = changePercent || staticStock?.change || 0;
-  const finalVolume = volume || staticStock?.volume || 0;
+  const finalPrice = price;
+  const finalChange = changePercent;
+  const finalVolume = volume;
 
   return (
     <div className="rounded-xl border border-border bg-card p-5">
@@ -54,22 +49,23 @@ function WatchlistCard({ symbol, onToggle }: { symbol: string; onToggle: () => v
         <button onClick={onToggle} aria-label="Takipten çıkar" className="text-muted-foreground hover:text-destructive"><X className="w-4 h-4" /></button>
       </div>
       <div className="mt-3 flex items-baseline gap-2">
-        <div className="text-2xl font-bold">{finalPrice.toFixed(2)} TL</div>
+        <div className="text-2xl font-bold">{isLoading ? "…" : hasData ? `${finalPrice.toFixed(2)} TL` : "Fiyat alınamadı"}</div>
         <div className={`text-sm ${finalChange >= 0 ? "text-[color:var(--success)]" : "text-destructive"}`}>
-          {finalChange >= 0 ? "+" : ""}{finalChange.toFixed(2)}%
+          {hasData ? `${finalChange >= 0 ? "+" : ""}${finalChange.toFixed(2)}%` : "—"}
         </div>
-        {!isLoading && price > 0 && <span className="w-1.5 h-1.5 rounded-full bg-[color:var(--success)] inline-block" />}
+        {!isLoading && hasData && !quote.isError && <span className="w-1.5 h-1.5 rounded-full bg-[color:var(--success)] inline-block" />}
       </div>
+      <MarketDataStatus {...quote} onRetry={() => quote.refetch()} />
       <div className="mt-3">
-        <Sparkline
-          data={sparklineData.length > 5 ? sparklineData : genLine(symbol.charCodeAt(0), 30, finalChange >= 0 ? "up" : "down")}
+        {sparklineData.length > 1 ? <Sparkline
+          data={sparklineData}
           color={finalChange >= 0 ? "oklch(0.72 0.19 145)" : "oklch(0.65 0.22 25)"}
           height={60}
-        />
+        /> : <p className="text-xs text-muted-foreground">{historyError ? "Geçmiş verisi alınamadı." : "Grafik verisi bekleniyor."}</p>}
       </div>
       <div className="flex justify-between text-xs text-muted-foreground mt-3 pt-3 border-t border-border">
-        <span>Hacim: {(finalVolume / 1e9).toFixed(1)} Mlr</span>
-        <span>F/K: {(staticStock?.pe || 0).toFixed(1)}</span>
+        <span>Hacim: {hasData ? `${(finalVolume / 1e6).toFixed(1)} Mn lot` : "—"}</span>
+        <span>F/K: Veri sağlanmıyor</span>
       </div>
     </div>
   );
@@ -90,7 +86,7 @@ function TakipPage() {
     <AppShell>
       <PageHeader
         title="Takip Listem"
-        subtitle="Favori hisselerinizi buradan izleyin."
+        subtitle="Favori hisselerinizi buradan izleyin. Listeniz bu tarayıcıda saklanır."
         action={<button onClick={() => setShowAdd(!showAdd)} className="bg-primary text-primary-foreground rounded-lg px-4 py-2 text-sm font-medium inline-flex items-center gap-2 hover:bg-primary/90"><Plus className="w-4 h-4" /> Hisse Ekle</button>}
       />
 

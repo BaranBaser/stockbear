@@ -13,8 +13,10 @@ export default defineConfig({
   },
   vite: {
     plugins: [
-      VitePWA({
+      ...VitePWA({
         registerType: "autoUpdate",
+        injectRegister: false,
+        outDir: ".output/public",
         includeAssets: ["favicon.ico", "stockbear-logo.png"],
         manifest: {
           name: "stockbear — Yapay Zeka Destekli Hisse Analizi",
@@ -43,21 +45,27 @@ export default defineConfig({
           ],
         },
         workbox: {
+          globDirectory: ".output/public",
+          inlineWorkboxRuntime: true,
+          clientsClaim: true,
+          skipWaiting: true,
+          navigateFallback: null,
           globPatterns: [
             "**/*.{js,css,html,ico,png,svg,woff,woff2}",
           ],
           runtimeCaching: [
             {
-              urlPattern: /^https:\/\/query1\.finance\.yahoo\.com\/.*/i,
-              handler: "NetworkFirst",
-              options: {
-                cacheName: "yahoo-finance",
-                expiration: { maxEntries: 50, maxAgeSeconds: 300 },
-              },
+              urlPattern: ({ request }) => request.mode === "navigate",
+              handler: "NetworkOnly",
+              options: { precacheFallback: { fallbackURL: "/offline.html" } },
             },
           ],
         },
-      }),
+      }).map(plugin => ({
+        ...plugin,
+        // SSR/Nitro must not rewrite a worker after its asset metadata is built.
+        applyToEnvironment: (environment: { name: string }) => environment.name === "client",
+      })),
     ],
   },
 });

@@ -147,7 +147,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             );
           })}
           <div className="mt-4 rounded-xl border border-border bg-card p-4">
-            <div className="text-sm font-semibold">Canlı Piyasa Verisi</div>
+            <div className="text-sm font-semibold">Piyasa Verisi</div>
             <p className="text-xs text-muted-foreground mt-1">Yahoo Finance ile BIST hisselerinin güncel fiyatlarını takip edin.</p>
             <img src={aiChip} alt="" width={512} height={256} loading="lazy" className="w-full h-20 object-cover rounded-lg my-3" />
             <Link to="/ai" className="w-full flex items-center justify-center gap-2 bg-primary text-primary-foreground text-sm font-medium rounded-lg py-2 hover:bg-primary/90">

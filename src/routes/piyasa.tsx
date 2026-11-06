@@ -1,9 +1,7 @@
+import { MarketDataStatus } from "@/components/MarketDataStatus";
+import { useBistData } from "@/lib/useBistData";
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { AppShell, PageHeader, Sparkline, genLine } from "@/components/AppShell";
-import { stocks, SECTOR_MAP } from "@/lib/market-data";
-import { useServerFn } from "@tanstack/react-start";
-import { fetchBistData } from "@/lib/ai.functions";
-import { useQuery } from "@tanstack/react-query";
+import { AppShell, PageHeader } from "@/components/AppShell";
 import { TrendingUp, TrendingDown, RefreshCw, Search, ArrowUpDown, ArrowUp, ArrowDown, Filter, AlertCircle } from "lucide-react";
 import { AiAnalysisTable } from "@/components/AiAnalysisTable";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -13,7 +11,7 @@ export const Route = createFileRoute("/piyasa")({
   head: () => ({
     meta: [
       { title: "Piyasa Verileri - stockbear" },
-      { name: "description", content: "BIST hisselerinin canlı fiyatları, sektör performansı ve piyasa verileri." },
+      { name: "description", content: "BIST hisselerinin sağlayıcı fiyatları, sektör performansı ve piyasa verileri." },
     ],
   }),
   component: PiyasaPage,
@@ -27,26 +25,13 @@ function PiyasaPage() {
   const [sectorFilter, setSectorFilter] = useState("Tümü");
   const [sortKey, setSortKey] = useState<SortKey | null>("symbol");
   const [sortAsc, setSortAsc] = useState(true);
-  const fetchBist = useServerFn(fetchBistData);
 
-  const { data: liveData = [], isLoading, refetch, isFetching, isError } = useQuery({
-    queryKey: ["bist-data"],
-    queryFn: async () => {
-      try { return await fetchBist({}); } catch (e) { console.warn("fetchBistData error:", e); return []; }
-    },
-    staleTime: 60_000,
-    refetchInterval: 120_000,
-    throwOnError: false,
-  });
 
-  const displayData = liveData.length > 0
-    ? liveData.map((d) => ({
-        ...d,
-        sector: SECTOR_MAP[d.symbol] || "Diğer",
-        marketCap: stocks.find((s) => s.symbol === d.symbol)?.marketCap || 0,
-        pe: stocks.find((s) => s.symbol === d.symbol)?.pe || 0,
-      }))
-    : stocks;
+  const market = useBistData();
+  const liveData = market.stocks;
+  const { isLoading, refetch, isFetching, isError } = market;
+
+  const displayData = liveData.map(d => ({ ...d, pe: 0, marketCap: 0 }));
 
   const sectors = ["Tümü", ...Array.from(new Set(displayData.map((s) => s.sector)))];
 
@@ -116,7 +101,7 @@ function PiyasaPage() {
     <AppShell>
       <PageHeader
         title="Piyasa Özeti"
-        subtitle={`${displayData.length} hisse — canlı fiyatlar, sektör analizi ve detaylı tablo.`}
+        subtitle={`${displayData.length} hisse — sağlayıcı fiyatları, sektör analizi ve detaylı tablo.`}
         action={
           <button onClick={() => refetch()} disabled={isFetching} className="bg-secondary border border-border rounded-lg px-4 py-2 text-sm inline-flex items-center gap-2 hover:border-primary/40 disabled:opacity-50">
             <RefreshCw className={`w-4 h-4 ${isFetching ? "animate-spin" : ""}`} />
@@ -125,13 +110,14 @@ function PiyasaPage() {
         }
       />
 
+      <MarketDataStatus {...market} hasData={liveData.length > 0} onRetry={() => refetch()} label="En eski fiyat zamanı" />
       {/* Özet kartları */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
         {[
           { label: "Toplam Hisse", value: displayData.length.toString(), sub: "BIST" },
           { label: "Yükselen", value: gainers.toString(), sub: "adet", up: true },
           { label: "Düşen", value: losers.toString(), sub: "adet", up: false },
-          { label: "Toplam Hacim", value: `${(totalVol / 1e9).toFixed(1)} Mlr TL`, sub: "günlük" },
+          { label: "Toplam Hacim", value: `${(totalVol / 1e9).toFixed(1)} Mlr lot`, sub: "günlük" },
           { label: "Ort. Değişim", value: `${avgChange >= 0 ? "+" : ""}${avgChange.toFixed(2)}%`, sub: "ortalama", up: avgChange >= 0 },
         ].map((k) => (
           <div key={k.label} className="relative overflow-hidden rounded-xl border border-border bg-card p-4">
@@ -202,7 +188,7 @@ function PiyasaPage() {
       {/* Tablo */}
       {isLoading && (
         <div className="rounded-xl border border-border bg-card p-8 text-center">
-          <div className="animate-pulse text-muted-foreground">Canlı veriler yükleniyor... (48 hisse)</div>
+          <div className="animate-pulse text-muted-foreground">Piyasa verileri yükleniyor…</div>
         </div>
       )}
 
@@ -247,11 +233,11 @@ function PiyasaPage() {
               </tr>
             </thead>
             <tbody>
-              {filtered.map((s, i) => (
+              {filtered.map((s) => (
                 <tr key={s.symbol} className="border-b border-border hover:bg-secondary/40 transition-colors">
                   <td className="p-3">
                     <Link to="/analiz" search={{ symbol: s.symbol }} className="font-semibold hover:text-primary">{s.symbol}</Link>
-                    <div className="text-xs text-muted-foreground truncate max-w-[120px]">{s.name}</div>
+                    <div className="text-xs text-muted-foreground truncate max-w-[120px]">{s.name}</div><div className="text-[10px] text-muted-foreground">{new Date(s.asOf).toLocaleString("tr-TR", { timeZone: "Europe/Istanbul" })}{market.unavailableSymbols.includes(s.symbol) ? " · Yenilenemedi" : ""}</div>
                   </td>
                   <td className="text-muted-foreground text-xs">{s.sector}</td>
                   <td className="text-right font-medium">{typeof s.price === "number" ? s.price.toFixed(2) : s.price} TL</td>
@@ -262,17 +248,17 @@ function PiyasaPage() {
                     </span>
                   </td>
                   <td className="text-right text-muted-foreground text-xs">{(s.volume / 1e6).toFixed(0)} Mn</td>
-                  <td className="text-right text-muted-foreground text-xs">{s.low52}</td>
-                  <td className="text-right text-muted-foreground text-xs">{s.high52}</td>
+                  <td className="text-right text-muted-foreground text-xs">{s.low52 || "—"}</td>
+                  <td className="text-right text-muted-foreground text-xs">{s.high52 || "—"}</td>
                   <td className="text-right pr-3">
                     <div className="w-20 inline-block">
-                      <Sparkline data={genLine(i + 3, 16, s.changePercent >= 0 ? "up" : "down")} color={s.changePercent >= 0 ? "oklch(0.72 0.19 145)" : "oklch(0.65 0.22 25)"} height={24} width={80} fill={false} />
+                      <Link to="/grafik" search={{ symbol: s.symbol }} className="text-xs text-primary underline">Grafiği aç</Link>
                     </div>
                   </td>
                 </tr>
               ))}
               {filtered.length === 0 && !isLoading && (
-                <tr><td colSpan={8} className="p-8 text-center text-muted-foreground text-sm">Aramanızla eşleşen hisse bulunamadı.</td></tr>
+                <tr><td colSpan={8} className="p-8 text-center text-muted-foreground text-sm">{isError ? "Piyasa verisi alınamadı." : "Aramanızla eşleşen hisse bulunamadı."}</td></tr>
               )}
             </tbody>
           </table>

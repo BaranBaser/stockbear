@@ -1,9 +1,7 @@
+import { MarketDataStatus } from "@/components/MarketDataStatus";
+import { useBistData } from "@/lib/useBistData";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { AppShell, PageHeader } from "@/components/AppShell";
-import { stocks, SECTOR_MAP } from "@/lib/market-data";
-import { useServerFn } from "@tanstack/react-start";
-import { fetchBistData } from "@/lib/ai.functions";
-import { useQuery } from "@tanstack/react-query";
 import { Filter, RefreshCw, TrendingUp, TrendingDown, BarChart3, Target, Activity } from "lucide-react";
 import { useMemo, useState } from "react";
 import { z } from "zod";
@@ -56,26 +54,13 @@ function ScreenerPage() {
     setSectorState(s);
     navigate({ search: { preset: preset === "hepsi" ? undefined : preset, sector: s === "Tümü" ? undefined : s, sort: sortBy === "changePercent" ? undefined : sortBy }, replace: true });
   };
-  const fetchBist = useServerFn(fetchBistData);
 
-  const { data: liveData = [], isLoading, refetch, isFetching, isError } = useQuery({
-    queryKey: ["bist-data"],
-    queryFn: async () => {
-      try { return await fetchBist({}); } catch (e) { console.warn("fetchBistData error:", e); return []; }
-    },
-    staleTime: 60_000,
-    refetchInterval: 120_000,
-    throwOnError: false,
-  });
 
-  const displayData = liveData.length > 0
-    ? liveData.map((d) => ({
-        ...d,
-        sector: SECTOR_MAP[d.symbol] || "Diğer",
-        pe: stocks.find((s) => s.symbol === d.symbol)?.pe || 0,
-        marketCap: stocks.find((s) => s.symbol === d.symbol)?.marketCap || 0,
-      }))
-    : stocks;
+  const market = useBistData();
+  const liveData = market.stocks;
+  const { isLoading, refetch, isFetching, isError } = market;
+
+  const displayData = liveData.map(d => ({ ...d, pe: 0, marketCap: 0 }));
 
   const sectors = ["Tümü", ...Array.from(new Set(displayData.map((s) => s.sector)))];
 
@@ -86,18 +71,18 @@ function ScreenerPage() {
     if (preset === "düşükFk") arr = arr.filter((s) => s.pe > 0 && s.pe < 8);
     if (preset === "yüksekHacim") arr = arr.filter((s) => s.volume > 1e9);
     if (preset === "yükselen") arr = arr.filter((s) => s.changePercent > 0);
-    if (preset === "52Hdüşük") arr = arr.filter((s) => s.price < s.low52 * 1.15);
+    if (preset === "52Hdüşük") arr = arr.filter((s) => s.low52 > 0 && s.price < s.low52 * 1.15);
 
     // Manuel filtreler
     if (sector !== "Tümü") arr = arr.filter((s) => s.sector === sector);
     arr = arr.filter((s) => s.changePercent >= minChange && s.changePercent <= maxChange);
-    arr = arr.filter((s) => s.pe >= minPE && s.pe <= maxPE);
+    // This provider does not supply P/E data.
     arr = arr.filter((s) => s.volume >= minVolume * 1e6);
     arr = arr.filter((s) => s.price >= minPrice && s.price <= maxPrice);
     if (onlyGainers) arr = arr.filter((s) => s.changePercent > 0);
     if (onlyLosers) arr = arr.filter((s) => s.changePercent < 0);
-    if (near52Low) arr = arr.filter((s) => s.price < s.low52 * 1.15);
-    if (near52High) arr = arr.filter((s) => s.price > s.high52 * 0.85);
+    if (near52Low) arr = arr.filter((s) => s.low52 > 0 && s.price < s.low52 * 1.15);
+    if (near52High) arr = arr.filter((s) => s.high52 > 0 && s.price > s.high52 * 0.85);
 
     // Sıralama
     arr.sort((a, b) => {
@@ -111,7 +96,7 @@ function ScreenerPage() {
     });
 
     return arr;
-  }, [preset, sector, minChange, maxChange, minPE, maxPE, minVolume, minPrice, maxPrice, onlyGainers, onlyLosers, near52Low, near52High, sortBy, displayData]);
+  }, [preset, sector, minChange, maxChange, minVolume, minPrice, maxPrice, onlyGainers, onlyLosers, near52Low, near52High, sortBy, displayData]);
 
   const resetFilters = () => {
     applyFilter("hepsi", "Tümü", "changePercent");
@@ -163,12 +148,13 @@ function ScreenerPage() {
         }
       />
 
+      <MarketDataStatus {...market} hasData={liveData.length > 0} onRetry={() => refetch()} label="En eski fiyat zamanı" />
       {/* Preset butonları */}
       <div className="flex flex-wrap gap-2">
         {([
           { k: "hepsi", l: "Tümü", icon: BarChart3 },
           { k: "düşükFk", l: "Düşük F/K (<8)", icon: Target },
-          { k: "yüksekHacim", l: "Yüksek Hacim (>1 Mlr)", icon: Activity },
+          { k: "yüksekHacim", l: "Yüksek Hacim (>1 Mlr lot)", icon: Activity },
           { k: "yükselen", l: "Yükselenler", icon: TrendingUp },
           { k: "52Hdüşük", l: "52H Düşüğünde", icon: TrendingDown },
           { k: "teknoloji", l: "Teknoloji", icon: Filter },
@@ -176,6 +162,8 @@ function ScreenerPage() {
         ] as const).map((p) => (
           <button
             key={p.k}
+            disabled={p.k === "düşükFk"}
+            title={p.k === "düşükFk" ? "F/K verisi sağlanmıyor" : undefined}
             onClick={() => {
               let newSector = "Tümü";
               let newSort: "changePercent" | "price" | "volume" | "pe" = "changePercent";
@@ -229,15 +217,15 @@ function ScreenerPage() {
               </div>
 
               <div>
-                <label className="text-xs text-muted-foreground">F/K Oranı: {minPE} — {maxPE}</label>
+                <label className="text-xs text-muted-foreground">F/K verisi sağlanmıyor</label>
                 <div className="flex gap-2 mt-1">
-                  <input type="range" min={0} max={30} value={minPE} onChange={(e) => setMinPE(+e.target.value)} aria-label="Minimum F/K" className="w-1/2 accent-primary" />
-                  <input type="range" min={1} max={50} value={maxPE} onChange={(e) => setMaxPE(+e.target.value)} aria-label="Maksimum F/K" className="w-1/2 accent-primary" />
+                  <input type="range" disabled min={0} max={30} value={minPE} onChange={(e) => setMinPE(+e.target.value)} aria-label="Minimum F/K" className="w-1/2 accent-primary" />
+                  <input type="range" disabled min={1} max={50} value={maxPE} onChange={(e) => setMaxPE(+e.target.value)} aria-label="Maksimum F/K" className="w-1/2 accent-primary" />
                 </div>
               </div>
 
               <div>
-                <label className="text-xs text-muted-foreground">Min. Hacim: {minVolume} Mn TL</label>
+                <label className="text-xs text-muted-foreground">Min. Hacim: {minVolume} Mn lot</label>
                 <input type="range" min={0} max={5000} step={100} value={minVolume} onChange={(e) => setMinVolume(+e.target.value)} aria-label="Minimum hacim" className="w-full accent-primary" />
               </div>
 
@@ -266,7 +254,7 @@ function ScreenerPage() {
                   <option value="changePercent">Değişim (%)</option>
                   <option value="volume">Hacim</option>
                   <option value="price">Fiyat</option>
-                  <option value="pe">F/K Oranı</option>
+                  <option value="pe" disabled>F/K verisi sağlanmıyor</option>
                 </select>
               </div>
             </div>
@@ -289,7 +277,7 @@ function ScreenerPage() {
         {/* Sonuç tablosu */}
         <div className="lg:col-span-3 rounded-xl border border-border bg-card overflow-hidden">
           {isLoading && (
-            <div className="p-8 text-center text-muted-foreground text-sm animate-pulse">Canlı veriler yükleniyor...</div>
+            <div className="p-8 text-center text-muted-foreground text-sm animate-pulse">Piyasa verileri yükleniyor...</div>
           )}
           {isError && !isLoading && (
             <div className="p-8 text-center text-destructive text-sm">
@@ -314,7 +302,7 @@ function ScreenerPage() {
                   <tr key={s.symbol} className="border-b border-border hover:bg-secondary/40 transition-colors">
                     <td className="p-3">
                       <Link to="/analiz" search={{ symbol: s.symbol }} className="font-semibold hover:text-primary">{s.symbol}</Link>
-                      <div className="text-xs text-muted-foreground truncate max-w-[100px]">{s.name}</div>
+                      <div className="text-xs text-muted-foreground truncate max-w-[100px]">{s.name}</div><div className="text-[10px] text-muted-foreground">{new Date(s.asOf).toLocaleString("tr-TR", { timeZone: "Europe/Istanbul" })}{market.unavailableSymbols.includes(s.symbol) ? " · Yenilenemedi" : ""}</div>
                     </td>
                     <td className="text-muted-foreground text-xs">{s.sector}</td>
                     <td className="text-right">{typeof s.price === "number" ? s.price.toFixed(2) : s.price} TL</td>

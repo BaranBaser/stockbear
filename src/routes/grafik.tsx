@@ -1,3 +1,5 @@
+import type { IChartApi, UTCTimestamp } from "lightweight-charts";
+import { MarketDataStatus } from "@/components/MarketDataStatus";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { useState, useRef, useEffect, useMemo } from "react";
@@ -69,26 +71,20 @@ function GrafikPage() {
   });
   const [searchInput, setSearchInput] = useState(symbol);
   const chartContainerRef = useRef<HTMLDivElement>(null);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const chartRef = useRef<any>(null);
+  const chartRef = useRef<IChartApi | null>(null);
 
   const fetchHistory = useServerFn(fetchStockHistory);
 
-  const { data: history = [], isLoading } = useQuery({
+  const { data: history = [], isLoading, isError: historyError, refetch: refreshHistory } = useQuery({
     queryKey: ["stock-history", symbol, range],
-    queryFn: async () => {
-      try {
-        const r = await fetchHistory({ data: { symbol, range } });
-        return r ?? [];
-      } catch (e) { console.warn("fetchStockHistory error:", e);
-        return [];
-      }
-    },
+    queryFn: () => fetchHistory({ data: { symbol, range } }),
+    retry: false,
     staleTime: 300_000,
     throwOnError: false,
   });
 
-  const { price, changePercent, isLoading: priceLoading } = useLivePrice(symbol);
+  const quote = useLivePrice(symbol);
+  const { price, changePercent, isLoading: priceLoading, hasData } = quote;
 
   const stockName = useMemo(
     () => stocks.find((s) => s.symbol === symbol)?.name || symbol,
@@ -209,7 +205,7 @@ function GrafikPage() {
         wickDownColor: "#ef4444",
       });
 
-      candleSeries.setData(candleData as any);
+      candleSeries.setData(candleData.map(point => ({ ...point, time: point.time as UTCTimestamp })));
 
       if (sma20Data.length > 0) {
         const s = chart.addSeries(LineSeries, {
@@ -218,7 +214,7 @@ function GrafikPage() {
           priceLineVisible: false,
           lastValueVisible: false,
         });
-        s.setData(sma20Data as any);
+        s.setData(sma20Data.map(point => ({ ...point, time: point.time as UTCTimestamp })));
       }
       if (sma50Data.length > 0) {
         const s = chart.addSeries(LineSeries, {
@@ -227,7 +223,7 @@ function GrafikPage() {
           priceLineVisible: false,
           lastValueVisible: false,
         });
-        s.setData(sma50Data as any);
+        s.setData(sma50Data.map(point => ({ ...point, time: point.time as UTCTimestamp })));
       }
       if (ema12Data.length > 0) {
         const s = chart.addSeries(LineSeries, {
@@ -236,7 +232,7 @@ function GrafikPage() {
           priceLineVisible: false,
           lastValueVisible: false,
         });
-        s.setData(ema12Data as any);
+        s.setData(ema12Data.map(point => ({ ...point, time: point.time as UTCTimestamp })));
       }
       if (bollingerData && bollingerData.upper.length > 0) {
         const upperSeries = chart.addSeries(LineSeries, {
@@ -253,8 +249,8 @@ function GrafikPage() {
           priceLineVisible: false,
           lastValueVisible: false,
         });
-        upperSeries.setData(bollingerData.upper as any);
-        lowerSeries.setData(bollingerData.lower as any);
+        upperSeries.setData(bollingerData.upper.map(point => ({ ...point, time: point.time as UTCTimestamp })));
+        lowerSeries.setData(bollingerData.lower.map(point => ({ ...point, time: point.time as UTCTimestamp })));
       }
 
       chart.timeScale().fitContent();
@@ -286,6 +282,8 @@ function GrafikPage() {
 
   return (
     <AppShell>
+      <MarketDataStatus {...quote} onRetry={() => quote.refetch()} />
+      <MarketDataStatus isLoading={isLoading} isError={historyError} hasData={history.length > 0} asOf={history.at(-1)?.date} onRetry={() => refreshHistory()} label="Son mum zamanı" />
       <PageHeader
         title="Teknik Grafik"
         subtitle={`${stockName} (${symbol}) - Candlestick & İndikatörler`}
@@ -332,7 +330,7 @@ function GrafikPage() {
         <div>
           <div className="text-sm text-muted-foreground">{stockName}</div>
           <div className="text-3xl font-bold">
-            {priceLoading ? "..." : price.toFixed(2)} TL
+            {priceLoading ? "…" : hasData ? `${price.toFixed(2)} TL` : "Fiyat alınamadı"}
           </div>
         </div>
         <div
@@ -348,7 +346,7 @@ function GrafikPage() {
             <TrendingDown className="w-5 h-5" />
           )}
           {changePercent >= 0 ? "+" : ""}
-          {changePercent.toFixed(2)}%
+          {hasData ? `${changePercent.toFixed(2)}%` : "—"}
         </div>
       </div>
 

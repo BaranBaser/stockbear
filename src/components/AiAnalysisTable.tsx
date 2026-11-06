@@ -11,16 +11,10 @@ import {
 } from "@/components/ui/tooltip";
 
 export function AiAnalysisTable() {
-  const { data, isLoading, refetch, isFetching } = useQuery({
+  const { data, isLoading, refetch, isFetching, isError } = useQuery({
     queryKey: ["ai-top-analysis"],
-    queryFn: async () => {
-      try {
-        return await fetchTechnicalSignals({});
-      } catch (e) {
-        console.warn("fetchTechnicalSignals error:", e);
-        return [];
-      }
-    },
+    queryFn: () => fetchTechnicalSignals({}),
+    retry: false,
     staleTime: 5 * 60 * 1000,
     throwOnError: false,
   });
@@ -33,7 +27,7 @@ export function AiAnalysisTable() {
     if (!data) return [];
     
     // Zaten AL ve SAT filtreli geliyor, ama garanti olsun
-    let arr = data.filter((row: { symbol: string; analysis: { decision: string; rawScore: number } }) => row.analysis.decision === "AL" || row.analysis.decision === "SAT");
+    const arr = data.filter((row: { symbol: string; analysis: { decision: string; rawScore: number } }) => row.analysis.decision === "AL" || row.analysis.decision === "SAT");
     
     if (sortKey) {
       arr.sort((a, b) => {
@@ -88,6 +82,7 @@ export function AiAnalysisTable() {
         </button>
       </div>
 
+      {isError && <p role="alert" className="text-sm text-destructive mb-3">Sinyal verisi yenilenemedi. Önceki sonuçlar varsa güncel olmayabilir.</p>}
       <p className="text-xs text-muted-foreground mb-4 flex items-center gap-1.5">
         <Info className="w-4 h-4" />
         Piyasadaki 100+ hissenin Destek/Direnç, RSI, SMA gibi temel teknik göstergelere göre hızlı günlük taraması.
@@ -165,7 +160,7 @@ export function AiAnalysisTable() {
                         </span>
                       </td>
                       <td className="text-right py-3 text-xs font-bold">
-                        {row.analysis.currentPrice.toFixed(2)} ₺
+                        {row.analysis.currentPrice.toFixed(2)} {row.currency}
                       </td>
                     </tr>
                   ))
